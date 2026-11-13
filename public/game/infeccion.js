@@ -1,4 +1,4 @@
-const { BaseMode, W, H } = require('./base');
+import { BaseMode, W, H } from './base.js';
 
 const WALLS = [
   { x: 300, y: 130, w: 40, h: 260 },
@@ -121,4 +121,4 @@ class Infeccion extends BaseMode {
   }
 }
 
-module.exports = Infeccion;
+export default Infeccion;

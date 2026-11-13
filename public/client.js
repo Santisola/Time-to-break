@@ -1,3 +1,6 @@
+import { Net } from './net.js';
+import { HostEngine } from './host.js';
+
 (() => {
   const W = 1600;
   const H = 900;
@@ -136,6 +139,7 @@
       case 'joined':
         S.me = m.id;
         S.code = m.code;
+        S.net.rejoined();
         history.replaceState(null, '', `?sala=${m.code}`);
         $('home').classList.add('hidden');
         homeMsg('');
@@ -163,8 +167,33 @@
           S.results = null;
         }
         if (m.mode && !S.selectedByMe) S.selected = m.mode;
+        S.net.sync(m, S.me);
+        syncHost();
+        // Entré (o volví) con una ronda en curso: pedirle al host el estado.
+        if (!S.host && S.net.hostId !== null && (m.phase === 'countdown' || m.phase === 'playing') && !S.round) hello();
         ui();
         break;
+      case 'sig':
+        S.net.signal(m.from, m.d);
+        break;
+      case 'relay':
+        S.net.receive(m.from, m.d);
+        break;
+      case 'aborted':
+        S.host?.abort();
+        S.round = null;
+        toast(m.msg);
+        break;
+      case 'results':
+        S.results = m;
+        ui();
+        break;
+    }
+  }
+
+  // Lo que manda el host (por WebRTC, por el servidor o, si el host sos vos, directo del worker).
+  function onGameMessage(m) {
+    switch (m.t) {
       case 'round':
         P.active = false;
         S.round = m;
@@ -175,26 +204,65 @@
         S.grid = m.info.grid ? Uint8Array.from(m.info.grid) : null;
         ui();
         break;
-      case 's':
-        if (m.x?.g && S.grid) for (let i = 0; i < m.x.g.length; i += 2) S.grid[m.x.g[i]] = m.x.g[i + 1];
+      case 's': {
+        if (!S.round) return;
         m.at = performance.now();
+        // Tuplas [id, x, y, flags, cooldown, equipo] → objetos (ver BaseMode.snapshot).
+        m.b = m.b.map(([i, x, y, f, c, tm]) => ({ i, x, y, o: f & 1, d: f & 2, s: f & 4, z: f & 8, c, tm }));
+        if (m.v) {
+          const mine = m.b.find((b) => b.i === S.me);
+          if (mine) [mine.vx, mine.vy, mine.sp, mine.dc] = m.v;
+        }
         S.snaps.push(m);
         if (S.snaps.length > 40) S.snaps.shift();
-        for (const text of m.ev || []) S.feed.push({ text, at: m.at });
         reconcile(m);
         hud(m);
+        break;
+      }
+      case 'x':
+        if (m.g && S.grid) for (let i = 0; i < m.g.length; i += 2) S.grid[m.g[i]] = m.g[i + 1];
+        for (const text of m.ev || []) S.feed.push({ text, at: performance.now() });
         break;
       case 'pong': {
         const sample = performance.now() - m.c;
         P.rtt = P.rtt ? P.rtt * 0.75 + sample * 0.25 : sample;
         break;
       }
-      case 'results':
-        S.results = m;
-        ui();
-        break;
     }
   }
+
+  function syncHost() {
+    if (S.net.isHost && !S.host) {
+      S.host = new HostEngine(S.net, {
+        deliver: onGameMessage,
+        toServer: sendServer,
+        onError: toast,
+      });
+      P.rtt = 0;
+    } else if (!S.net.isHost && S.host) {
+      S.host.destroy();
+      S.host = null;
+    }
+    S.host?.setRoom(S.room, S.me);
+  }
+
+  function hello() {
+    const now = performance.now();
+    if (now - (hello.last || 0) < 1000) return;
+    hello.last = now;
+    S.net.toHost({ t: 'hello' }, true);
+  }
+
+  function sendServer(msg) {
+    if (S.ws?.readyState === 1) S.ws.send(JSON.stringify(msg));
+  }
+
+  S.net = new Net({
+    sendServer,
+    onFromHost: onGameMessage,
+    onFromPeer: (id, m) => S.host?.fromPeer(id, m),
+    onStatus: (mode) => sendServer({ t: 'net', mode }),
+  });
 
   // ---------- Paneles ----------
   function ui() {
@@ -206,6 +274,12 @@
     $('endBtn').classList.toggle('hidden', !(inRound && isHost()));
     $('touchDash').classList.toggle('hidden', !(inRound && isTouch));
     if (S.room && !inRound) renderPanel();
+  }
+
+  function netTag(net) {
+    if (net === 'p2p') return '<span class="net p2p" title="Conexión directa con el host">directo</span>';
+    if (net === 'relay') return '<span class="net relay" title="Su red no permite conexión directa: va por el servidor">vía servidor</span>';
+    return '<span class="net" title="Armando la conexión con el host">conectando…</span>';
   }
 
   function renderPanel() {
@@ -240,6 +314,7 @@
               <span class="rank">${i + 1}</span>
               <span class="dot" style="background:${p.color}"></span>
               <span class="nm">${esc(p.name)}${p.id === r.hostId ? ' 👑' : ''}${p.id === S.me ? ' (vos)' : ''}</span>
+              ${p.connected && p.id !== r.hostId ? netTag(p.net) : ''}
               <span class="sc">${p.score}</span>
             </li>`
           )
@@ -281,11 +356,11 @@
         renderPanel();
       };
     });
-    if ($('start')) $('start').onclick = () => S.ws.send(JSON.stringify({ t: 'start', mode: S.selected }));
-    if ($('toLobby')) $('toLobby').onclick = () => S.ws.send(JSON.stringify({ t: 'lobby' }));
+    if ($('start')) $('start').onclick = () => S.host?.start(S.selected);
+    if ($('toLobby')) $('toLobby').onclick = () => sendServer({ t: 'lobby' });
   }
 
-  $('endBtn').onclick = () => S.ws.send(JSON.stringify({ t: 'end' }));
+  $('endBtn').onclick = () => S.host?.end();
 
   // ---------- HUD ----------
   const hudCache = {};
@@ -382,7 +457,8 @@
     if (!force && sig === lastSent && now - lastSentAt < 250) return;
     lastSent = sig;
     lastSentAt = now;
-    S.ws.send(JSON.stringify({ t: 'input', x, y, d: dashSeq }));
+    if (S.host) S.host.input(x, y, dashSeq);
+    else S.net.toHost({ t: 'input', x, y, d: dashSeq });
   }
 
   function dash() {
@@ -392,7 +468,8 @@
   }
 
   setInterval(() => {
-    if (S.ws?.readyState === 1 && S.me) S.ws.send(JSON.stringify({ t: 'ping', c: performance.now() }));
+    // Latencia hasta el host (para la predicción). El host simula en su propio navegador: 0.
+    if (S.ws?.readyState === 1 && S.me && !S.host) S.net.toHost({ t: 'ping', c: performance.now() });
   }, 2000);
 
   // ---------- Predicción ----------

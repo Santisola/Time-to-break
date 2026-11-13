@@ -42,7 +42,8 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const wss = new WebSocketServer({ server, maxPayload: 4096 });
+// Los snapshots retransmitidos (jugadores sin conexión directa) pasan por acá.
+const wss = new WebSocketServer({ server, maxPayload: 64 * 1024 });
 const rooms = new Map();
 
 function makeCode() {
@@ -99,16 +100,13 @@ wss.on('connection', (ws) => {
   });
 });
 
-let last = Date.now();
 setInterval(() => {
   const now = Date.now();
-  const dt = Math.min(0.1, (now - last) / 1000);
-  last = now;
   for (const [code, room] of rooms) {
-    room.tick(dt);
+    room.tick();
     if (room.isAbandoned(now)) rooms.delete(code);
   }
-}, 1000 / 30);
+}, 1000);
 
 setInterval(() => {
   for (const ws of wss.clients) {

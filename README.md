@@ -22,6 +22,15 @@ Los puntos se acumulan entre rondas, y el ranking de la sala dura toda la reuni�
 
 Si alguien se cae o recarga la página, vuelve a entrar con el mismo link y mantiene sus puntos. El host tiene 8 segundos para volver antes de que la corona pase a otro jugador.
 
+### El host es el servidor
+
+La partida corre **en el navegador del host** y cada jugador se conecta directo con él por WebRTC (en estrella). Así la latencia es la de la conexión entre ustedes y no la de ir y volver hasta un servidor en otro país.
+
+- **El host tiene que tener buena compu y buena conexión** (cable o buen wifi; ~2 Mbps de subida con 20 jugadores). Lo ideal es que sea quien comparte pantalla.
+- Puede cambiar de pestaña (por ejemplo a la de Meet): la simulación corre en un Web Worker y no se frena.
+- Si el host se va a mitad de ronda, la ronda se corta y la corona pasa a otro. Los puntajes acumulados se mantienen.
+- En el lobby, al lado de cada jugador dice **directo** (WebRTC) o **vía servidor**: si una red (firewall, VPN) no deja armar la conexión directa, sus datos pasan por el servidor automáticamente. Juega igual, con más latencia.
+
 ## Correrlo
 
 ```bash
@@ -29,41 +38,26 @@ npm install
 npm start          # http://localhost:3000  (PORT=xxxx para cambiar el puerto)
 ```
 
-Para jugar con gente de afuera de tu red hay que publicarlo. Es un único proceso Node con WebSockets, sin base de datos ni build.
+Para jugar con gente de afuera de tu red hay que publicarlo. Es un único proceso Node (salas, puntajes y presentación entre navegadores), sin base de datos ni build. Como la partida no pasa por él, dónde esté alojado casi no afecta la latencia.
 
-### Fly.io (recomendado: servidor en São Paulo, ~40 ms desde Argentina)
-
-La configuración está en `fly.toml` + `Dockerfile`. La primera vez:
-
-```bash
-curl -L https://fly.io/install.sh | sh          # instala flyctl
-fly auth login
-fly launch --copy-config --no-deploy --name <nombre-unico>   # usa el fly.toml del repo
-fly deploy --ha=false
-```
-
-Después, cada cambio: `fly deploy --ha=false`.
-
-> **Una sola máquina.** Las salas viven en memoria: con 2 máquinas la gente quedaría repartida y no se encontraría. Por eso `--ha=false`. Si `fly status` muestra más de una, `fly scale count 1`.
-
-La máquina se apaga sola cuando no hay nadie y tarda unos segundos en arrancar con la primera visita.
-
-### Otras opciones
-
-- **Render / Railway**: servicio web desde el repo con build `npm install` y start `npm start`. Solo tienen servidores en EE.UU., Europa y Asia (~200 ms desde Argentina).
+- **Render** (el que usamos): servicio web desde el repo con build `npm install` y start `npm start`. El plan gratis se duerme a los 15 minutos sin uso: abrir el link un minuto antes de la reunión.
+- **Fly.io / Railway**: también sirven (hay `Dockerfile` y `fly.toml`). En Fly, desplegar con `fly deploy --ha=false`: las salas viven en memoria y tiene que haber una sola máquina.
 - **Rápido para probar**: `npx cloudflared tunnel --url http://localhost:3000` desde tu máquina te da una URL pública temporal.
 
 ## Sumar un juego nuevo
 
-1. `src/modes/<nombre>.js`: una clase que extiende `BaseMode` (`src/modes/base.js` ya trae movimiento, embestida, choques, paredes y bordes). Implementa `tick(dt, frozen)`, `isDone()` y `results()` → `{ title, lines, points }`, y opcionalmente `extra()` (datos por tick) y `staticInfo()` (datos fijos de la ronda).
-2. Registrarla en `src/modes/index.js`.
+1. `public/game/<nombre>.js`: una clase que extiende `BaseMode` (`public/game/base.js` ya trae movimiento, embestida, choques, paredes y bordes). Implementa `tick(dt, frozen)`, `isDone()` y `results()` → `{ title, lines, points }`, y opcionalmente `extra()` (datos por tick, se pueden perder), `reliableExtra()` (datos que no se pueden perder) y `staticInfo()` (datos fijos de la ronda).
+2. Registrarla en `public/game/modes.js` y agregar su clave a `MODE_KEYS` en `src/room.js`.
 3. En `public/client.js`: agregarla a `MODES` (tarjeta del lobby) y dibujar su fondo en `frame()`, en la parte de `drawSumo/drawInfeccion/drawPintada`.
 
 ## Estructura
 
 ```
-server.js            HTTP estático + WebSocket + loop a 30 Hz
-src/room.js          sala: jugadores, host, fases (lobby → countdown → playing → results), puntajes
-src/modes/           un archivo por juego + base.js con la física compartida
-public/              cliente (canvas + interpolación de snapshots)
+server.js            HTTP estático + WebSocket
+src/room.js          sala: jugadores, host, fase, puntajes, señalización WebRTC y retransmisión
+public/game/         la partida (corre en el navegador del host): un archivo por juego,
+                     base.js con la física compartida y worker.js con el loop a 30 Hz
+public/net.js        conexiones WebRTC host ↔ jugadores, con respaldo vía servidor
+public/host.js       lado host: worker + reparto de snapshots
+public/client.js     UI, dibujo (canvas), interpolación y predicción del blob propio
 ```

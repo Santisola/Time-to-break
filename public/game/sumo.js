@@ -1,4 +1,4 @@
-const { BaseMode, W, H } = require('./base');
+import { BaseMode, W, H } from './base.js';
 
 const R_START = 400;
 const R_MIN = 120;
@@ -91,4 +91,4 @@ class Sumo extends BaseMode {
   }
 }
 
-module.exports = Sumo;
+export default Sumo;

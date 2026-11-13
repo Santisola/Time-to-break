@@ -222,16 +222,34 @@ class BaseMode {
     return o;
   }
 
+  /**
+   * Estado por tick que viaja por el canal no confiable (si se pierde uno, llega el siguiente).
+   * b: tuplas [id, x, y, flags, cooldown 0-9, equipo] con flags 1=afuera 2=embistiendo 4=aturdido 8=zombie.
+   * v: datos que solo necesita cada jugador para predecir su propio blob: [vx, vy, velocidad, cooldown].
+   */
   snapshot() {
-    return {
-      tl: Math.ceil(this.timeLeft()),
-      b: this.bodies.map((b) => this.bodyState(b)),
-      x: this.extra(),
-      ev: this.events.splice(0),
-    };
+    const b = [];
+    const v = {};
+    for (const body of this.bodies) {
+      const o = this.bodyState(body);
+      b.push([o.i, o.x, o.y, (o.o ? 1 : 0) | (o.d ? 2 : 0) | (o.s ? 4 : 0) | (o.z ? 8 : 0), o.c || 0, o.tm ?? 0]);
+      v[o.i] = [o.vx, o.vy, o.sp || 1, o.dc || 1.4];
+    }
+    return { tl: Math.ceil(this.timeLeft()), b, x: this.extra(), v };
+  }
+
+  // Lo que no se puede perder (eventos, celdas pintadas): viaja por el canal confiable.
+  reliable() {
+    const ev = this.events.splice(0);
+    const g = this.reliableExtra();
+    return ev.length || g?.length ? { ev, g } : null;
   }
 
   extra() {
+    return null;
+  }
+
+  reliableExtra() {
     return null;
   }
 
@@ -240,4 +258,4 @@ class BaseMode {
   }
 }
 
-module.exports = { BaseMode, W, H, R, shuffle, cluster };
+export { BaseMode, W, H, R, shuffle, cluster };

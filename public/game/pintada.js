@@ -1,4 +1,4 @@
-const { BaseMode, W, H, cluster } = require('./base');
+import { BaseMode, W, H, cluster } from './base.js';
 
 const CELL = 50;
 const COLS = W / CELL;
@@ -137,10 +137,13 @@ class Pintada extends BaseMode {
 
   extra() {
     return {
-      g: this.diffs.splice(0),
       c: this.counts(),
       k: this.buckets.map((k) => [k.id, Math.round(k.x), Math.round(k.y)]),
     };
+  }
+
+  reliableExtra() {
+    return this.diffs.splice(0);
   }
 
   staticInfo() {
@@ -148,4 +151,4 @@ class Pintada extends BaseMode {
   }
 }
 
-module.exports = Pintada;
+export default Pintada;
