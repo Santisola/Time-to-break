@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Time to Break</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <canvas id="cv"></canvas>
+
+    <section id="home" class="screen">
+      <div class="card home-card">
+        <h1>Time to <span>Break</span></h1>
+        <p class="sub">Jueguitos rápidos para el viernes</p>
+        <label>Tu nombre<input id="name" maxlength="16" autocomplete="off" placeholder="Ej: Santi" /></label>
+        <button id="create" class="btn primary">Crear sala</button>
+        <div class="or"><span>o entrá a una</span></div>
+        <div class="row">
+          <input id="code" maxlength="4" placeholder="CÓDIGO" autocomplete="off" />
+          <button id="join" class="btn">Unirme</button>
+        </div>
+        <p id="homeMsg" class="msg"></p>
+      </div>
+    </section>
+
+    <section id="panel" class="screen hidden"></section>
+
+    <div id="hud" class="hidden">
+      <div id="hudTop">
+        <span id="hudMode"></span>
+        <span id="hudTime"></span>
+        <span id="hudInfo"></span>
+      </div>
+      <div id="feed"></div>
+      <div id="banner" class="hidden"></div>
+      <div id="dash"><div><i></i></div><span>Espacio = embestida</span></div>
+      <button id="endBtn" class="btn small hidden">Terminar ronda</button>
+    </div>
+
+    <div id="center" class="hidden"></div>
+    <button id="touchDash" class="hidden" aria-label="Embestida">💨</button>
+    <div id="conn" class="hidden">Reconectando…</div>
+    <div id="toast" class="hidden"></div>
+
+    <script src="client.js"></script>
+  </body>
+</html>
