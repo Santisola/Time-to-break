@@ -590,7 +590,7 @@
       ctx.fillStyle = `rgba(255,255,255,${0.15 + 0.15 * Math.sin(now / 600 + i)})`;
       ctx.fillRect(sx, sy, 3, 3);
     }
-    ctx.strokeStyle = 'rgba(255,107,154,0.25)';
+    ctx.strokeStyle = 'rgba(118,70,221,0.45)';
     ctx.setLineDash([14, 14]);
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -610,7 +610,7 @@
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.lineWidth = 12;
-    ctx.strokeStyle = r < r0 * 0.995 ? `hsl(${345 + 10 * Math.sin(now / 150)},85%,62%)` : '#c98d4b';
+    ctx.strokeStyle = r < r0 * 0.995 ? `hsl(${16 + 6 * Math.sin(now / 150)},96%,${55 + 8 * Math.sin(now / 150)}%)` : '#c98d4b';
     ctx.stroke();
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(160,100,40,0.35)';

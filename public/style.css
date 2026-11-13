@@ -5,7 +5,8 @@
   --line: #34386a;
   --text: #f3f4ff;
   --muted: #a3a7d6;
-  --accent: #ff6b9a;
+  --accent: #fa5a1e; /* marca: CTAs */
+  --brand-2: #7646dd; /* marca: selección */
   --accent-2: #ffd166;
   --ok: #7ed957;
 }
@@ -103,7 +104,7 @@ input {
 }
 
 input:focus {
-  border-color: var(--accent);
+  border-color: var(--brand-2);
 }
 
 #code {
@@ -159,8 +160,10 @@ input:focus {
 .btn.primary {
   background: var(--accent);
   border-color: transparent;
-  color: #1a0b14;
-  box-shadow: 0 5px 0 #b8406a;
+  color: #fff;
+  font-weight: 700;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 5px 0 #b33d0f;
 }
 
 .btn.big {
@@ -358,8 +361,8 @@ h3 {
 }
 
 .mode.sel {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--card-2));
+  border-color: var(--brand-2);
+  background: color-mix(in srgb, var(--brand-2) 22%, var(--card-2));
 }
 
 .mode .em {
