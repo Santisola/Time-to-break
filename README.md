@@ -29,9 +29,28 @@ npm install
 npm start          # http://localhost:3000  (PORT=xxxx para cambiar el puerto)
 ```
 
-Para jugar con gente de afuera de tu red hay que publicarlo. Es un único proceso Node con WebSockets, sin base de datos ni build:
+Para jugar con gente de afuera de tu red hay que publicarlo. Es un único proceso Node con WebSockets, sin base de datos ni build.
 
-- **Render / Railway / Fly.io**: crear un servicio web desde el repo con build `npm install` y start `npm start`. Los tres soportan WebSockets.
+### Fly.io (recomendado: servidor en São Paulo, ~40 ms desde Argentina)
+
+La configuración está en `fly.toml` + `Dockerfile`. La primera vez:
+
+```bash
+curl -L https://fly.io/install.sh | sh          # instala flyctl
+fly auth login
+fly launch --copy-config --no-deploy --name <nombre-unico>   # usa el fly.toml del repo
+fly deploy --ha=false
+```
+
+Después, cada cambio: `fly deploy --ha=false`.
+
+> **Una sola máquina.** Las salas viven en memoria: con 2 máquinas la gente quedaría repartida y no se encontraría. Por eso `--ha=false`. Si `fly status` muestra más de una, `fly scale count 1`.
+
+La máquina se apaga sola cuando no hay nadie y tarda unos segundos en arrancar con la primera visita.
+
+### Otras opciones
+
+- **Render / Railway**: servicio web desde el repo con build `npm install` y start `npm start`. Solo tienen servidores en EE.UU., Europa y Asia (~200 ms desde Argentina).
 - **Rápido para probar**: `npx cloudflared tunnel --url http://localhost:3000` desde tu máquina te da una URL pública temporal.
 
 ## Sumar un juego nuevo

@@ -1,0 +1,37 @@
+# Fly.io — servidor en São Paulo (gru), lo más cerca de Argentina.
+#
+# IMPORTANTE: las salas viven en memoria, así que tiene que haber UNA sola máquina.
+# Desplegar siempre con `fly deploy --ha=false` (si alguna vez quedan 2: `fly scale count 1`).
+
+app = "time-to-break"
+primary_region = "gru"
+
+[build]
+
+[env]
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Se apaga sola cuando no hay nadie conectado y arranca con la primera visita (unos segundos).
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # Cada jugador es una conexión WebSocket; el default (25) se queda corto para 20+ personas.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 150
+    hard_limit = 200
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
