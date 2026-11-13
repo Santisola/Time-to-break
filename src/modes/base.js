@@ -29,6 +29,7 @@ class BaseMode {
     this.time = 0;
     this.duration = 90;
     this.events = [];
+    this.phys = { grip: 7, maxV: 260, dashPow: 600, bounded: true };
     this.bodies = shuffle(
       players.map((p) => ({
         id: p.id,
@@ -61,7 +62,9 @@ class BaseMode {
     return Math.max(0, this.duration - this.time);
   }
 
-  move(dt, frozen, { grip = 7, maxV = 260, dashPow = 600 } = {}) {
+  // El cliente replica esta misma física para predecir su propio blob (public/client.js → predictStep).
+  move(dt, frozen) {
+    const { grip, maxV, dashPow } = this.phys;
     for (const b of this.bodies) {
       if (!b.alive) continue;
       if (!frozen) {
@@ -209,7 +212,9 @@ class BaseMode {
   }
 
   bodyState(b) {
-    const o = { i: b.id, x: Math.round(b.x), y: Math.round(b.y) };
+    const o = { i: b.id, x: Math.round(b.x), y: Math.round(b.y), vx: Math.round(b.vx), vy: Math.round(b.vy) };
+    if (b.speed !== 1) o.sp = b.speed;
+    if (b.dashCooldown !== 1.4) o.dc = b.dashCooldown;
     if (!b.alive) o.o = 1;
     if (b.dashT > 0) o.d = 1;
     if (b.stun > 0) o.s = 1;

@@ -30,6 +30,7 @@ class Infeccion extends BaseMode {
   constructor(players) {
     super(players);
     this.duration = 100;
+    this.phys = { grip: 8, maxV: 250, dashPow: 520, bounded: true };
     this.infections = {};
     const zombies = Math.max(1, Math.round(this.bodies.length / 6));
     const zombieSpots = [
@@ -65,7 +66,7 @@ class Infeccion extends BaseMode {
 
   tick(dt, frozen) {
     if (!frozen) this.time += dt;
-    this.move(dt, frozen, { grip: 8, maxV: 250, dashPow: 520 });
+    this.move(dt, frozen);
     this.collide(
       (a, b) => {
         if (frozen || a.z === b.z) return;

@@ -60,6 +60,12 @@
     look: new Map(),
   };
 
+  // Predicción local de tu blob: se mueve al instante con la misma física que el servidor
+  // y se corrige de a poco comparando contra donde estabas hace un RTT.
+  const P = { active: false, x: 0, y: 0, vx: 0, vy: 0, dashCd: 0, dashQueued: false, cooldown: 1.4, speed: 1, stun: false, hist: [], rtt: 0 };
+
+  window.__ttb = { S, P }; // para depurar desde la consola
+
   const isHost = () => S.room && S.room.hostId === S.me;
   const playerById = (id) => S.room?.players.find((p) => p.id === id);
   const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -160,6 +166,7 @@
         ui();
         break;
       case 'round':
+        P.active = false;
         S.round = m;
         S.snaps = [];
         S.fallen.clear();
@@ -174,8 +181,14 @@
         S.snaps.push(m);
         if (S.snaps.length > 40) S.snaps.shift();
         for (const text of m.ev || []) S.feed.push({ text, at: m.at });
+        reconcile(m);
         hud(m);
         break;
+      case 'pong': {
+        const sample = performance.now() - m.c;
+        P.rtt = P.rtt ? P.rtt * 0.75 + sample * 0.25 : sample;
+        break;
+      }
       case 'results':
         S.results = m;
         ui();
@@ -311,7 +324,10 @@
     setHud('banner', esc(banner));
 
     $('dash').classList.toggle('hidden', !mine || !!mine.o);
-    if (mine) $('dash').querySelector('i').style.width = `${100 - ((mine.c || 0) / 9) * 100}%`;
+    if (mine) {
+      const ready = P.active ? 1 - P.dashCd / P.cooldown : 1 - (mine.c || 0) / 9;
+      $('dash').querySelector('i').style.width = `${ready * 100}%`;
+    }
 
     let center = '';
     if (snap.ph === 'countdown') {
@@ -371,7 +387,114 @@
 
   function dash() {
     dashSeq++;
+    if (P.active) P.dashQueued = true;
     sendInput(true);
+  }
+
+  setInterval(() => {
+    if (S.ws?.readyState === 1 && S.me) S.ws.send(JSON.stringify({ t: 'ping', c: performance.now() }));
+  }, 2000);
+
+  // ---------- Predicción ----------
+  function reconcile(snap) {
+    const mine = snap.b.find((b) => b.i === S.me);
+    if (!mine || mine.o || snap.ph !== 'playing') {
+      P.active = false;
+      P.dashQueued = false;
+      return;
+    }
+    P.stun = !!mine.s;
+    P.speed = mine.sp || 1;
+    P.cooldown = mine.dc || 1.4;
+    const reset = () => {
+      Object.assign(P, { x: mine.x, y: mine.y, vx: mine.vx, vy: mine.vy, hist: [] });
+    };
+    if (!P.active) {
+      P.active = true;
+      P.dashCd = 0;
+      return reset();
+    }
+    // El estado que manda el servidor incluye tus teclas de hace ~1 RTT: comparalo con tu predicción de ese momento.
+    const target = performance.now() - P.rtt - 17;
+    let past = null;
+    for (const h of P.hist) {
+      if (h.t > target) break;
+      past = h;
+    }
+    if (!past) return;
+    const ex = mine.x - past.x;
+    const ey = mine.y - past.y;
+    if (Math.hypot(ex, ey) > 160) return reset();
+    const k = 0.3;
+    const fix = { x: ex * k, y: ey * k, vx: (mine.vx - past.vx) * k, vy: (mine.vy - past.vy) * k };
+    for (const s of [P, ...P.hist]) {
+      s.x += fix.x;
+      s.y += fix.y;
+      s.vx += fix.vx;
+      s.vy += fix.vy;
+    }
+  }
+
+  function predictStep(dt, now, others) {
+    const phys = S.round.phys;
+    const inp = P.stun ? { x: 0, y: 0 } : direction();
+    P.dashCd = Math.max(0, P.dashCd - dt);
+    if (P.dashQueued) {
+      P.dashQueued = false;
+      let dx = inp.x;
+      let dy = inp.y;
+      if (!dx && !dy) {
+        const s = Math.hypot(P.vx, P.vy);
+        if (s > 20) {
+          dx = P.vx / s;
+          dy = P.vy / s;
+        }
+      }
+      const len = Math.hypot(dx, dy);
+      if (!P.stun && P.dashCd <= 0 && len > 0) {
+        P.vx += (dx / len) * phys.dashPow;
+        P.vy += (dy / len) * phys.dashPow;
+        P.dashCd = P.cooldown;
+      }
+    }
+    // Mismo decaimiento por tick que el servidor (30 Hz), escalado al dt del frame.
+    const k = 1 - Math.pow(1 - Math.min(1, phys.grip / 30), dt * 30);
+    P.vx += (inp.x * phys.maxV * P.speed - P.vx) * k;
+    P.vy += (inp.y * phys.maxV * P.speed - P.vy) * k;
+    P.x += P.vx * dt;
+    P.y += P.vy * dt;
+
+    for (const o of others) {
+      if (o.o || o.i === S.me) continue;
+      const dx = P.x - o.x;
+      const dy = P.y - o.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 0 && d < R * 2) {
+        P.x += (dx / d) * (R * 2 - d) * 0.5;
+        P.y += (dy / d) * (R * 2 - d) * 0.5;
+      }
+    }
+    for (const w of S.round.info.walls || []) {
+      const cx = Math.max(w.x, Math.min(P.x, w.x + w.w));
+      const cy = Math.max(w.y, Math.min(P.y, w.y + w.h));
+      const dx = P.x - cx;
+      const dy = P.y - cy;
+      const d = Math.hypot(dx, dy);
+      if (d >= R || d === 0) continue;
+      P.x += (dx / d) * (R - d);
+      P.y += (dy / d) * (R - d);
+      const vn = (P.vx * dx + P.vy * dy) / d;
+      if (vn < 0) {
+        P.vx -= (1.3 * vn * dx) / d;
+        P.vy -= (1.3 * vn * dy) / d;
+      }
+    }
+    if (phys.bounded) {
+      P.x = Math.max(R, Math.min(W - R, P.x));
+      P.y = Math.max(R, Math.min(H - R, P.y));
+    }
+    P.hist.push({ t: now, x: P.x, y: P.y, vx: P.vx, vy: P.vy });
+    while (P.hist.length && now - P.hist[0].t > 1500) P.hist.shift();
   }
 
   const GAME_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift'];
@@ -767,10 +890,18 @@
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
 
     const { bodies, extra } = interpolate(now, INTERP_DELAY);
-    // Tu blob con menos retraso, para que responda rápido a las teclas.
-    const mine = interpolate(now, SELF_DELAY).bodies.find((o) => o.i === S.me);
+    const dt = Math.min(0.05, (now - (frame.last || now)) / 1000);
+    frame.last = now;
     const mineIdx = bodies.findIndex((o) => o.i === S.me);
-    if (mine && mineIdx >= 0) bodies[mineIdx] = mine;
+    if (mineIdx >= 0) {
+      if (P.active) {
+        predictStep(dt, now, bodies);
+        bodies[mineIdx] = { ...bodies[mineIdx], x: P.x, y: P.y };
+      } else {
+        const mine = interpolate(now, SELF_DELAY).bodies.find((o) => o.i === S.me);
+        if (mine) bodies[mineIdx] = mine;
+      }
+    }
     if (S.round.mode === 'sumo') drawSumo(extra, now);
     else if (S.round.mode === 'infeccion') drawInfeccion();
     else if (S.round.mode === 'pintada') drawPintada(extra, now);

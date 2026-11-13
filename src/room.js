@@ -66,6 +66,7 @@ class Room {
   }
 
   handle(p, msg) {
+    if (msg.t === 'ping') return send(p.ws, { t: 'pong', c: msg.c });
     if (msg.t === 'input') {
       let x = Number(msg.x) || 0;
       let y = Number(msg.y) || 0;
@@ -113,6 +114,7 @@ class Room {
       title: this.mode.constructor.title,
       help: this.mode.constructor.help,
       world: { w: W, h: H },
+      phys: this.mode.phys,
       info: this.mode.staticInfo(),
     };
   }

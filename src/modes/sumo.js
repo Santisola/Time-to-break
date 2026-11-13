@@ -12,6 +12,7 @@ class Sumo extends BaseMode {
   constructor(players) {
     super(players);
     this.duration = 90;
+    this.phys = { grip: 3.2, maxV: 260, dashPow: 560, bounded: false };
     this.cx = W / 2;
     this.cy = H / 2;
     this.arenaR = R_START;
@@ -32,7 +33,7 @@ class Sumo extends BaseMode {
       const t = Math.max(0, Math.min(1, (this.time - SHRINK_FROM) / (SHRINK_TO - SHRINK_FROM)));
       this.arenaR = R_START + (R_MIN - R_START) * t;
     }
-    this.move(dt, frozen, { grip: 3.2, maxV: 260, dashPow: 560 });
+    this.move(dt, frozen);
     this.collide(
       (a, b, impact) => {
         if (impact < 60) return;
