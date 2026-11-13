@@ -3,5 +3,4 @@ node_modules
 .claude
 *.log
 .env
-fly.toml
 README.md

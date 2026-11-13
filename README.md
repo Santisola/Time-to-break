@@ -41,7 +41,7 @@ npm start          # http://localhost:3000  (PORT=xxxx para cambiar el puerto)
 Para jugar con gente de afuera de tu red hay que publicarlo. Es un único proceso Node (salas, puntajes y presentación entre navegadores), sin base de datos ni build. Como la partida no pasa por él, dónde esté alojado casi no afecta la latencia.
 
 - **Render** (el que usamos): servicio web desde el repo con build `npm install` y start `npm start`. El plan gratis se duerme a los 15 minutos sin uso: abrir el link un minuto antes de la reunión.
-- **Fly.io / Railway**: también sirven (hay `Dockerfile` y `fly.toml`). En Fly, desplegar con `fly deploy --ha=false`: las salas viven en memoria y tiene que haber una sola máquina.
+- **Cualquier hosting con Node o Docker** sirve (hay un `Dockerfile`). Tiene que ser **una sola instancia**: las salas viven en memoria.
 - **Rápido para probar**: `npx cloudflared tunnel --url http://localhost:3000` desde tu máquina te da una URL pública temporal.
 
 ## Sumar un juego nuevo
