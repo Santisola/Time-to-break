@@ -15,6 +15,9 @@ Controles: **WASD o flechas** para moverse y **Espacio** para embestir (en fútb
 
 Los puntos se acumulan entre rondas, y el ranking de la sala dura toda la reunión.
 
+- **🎉 Modo party:** el host lo activa desde la sala. Arranca con la tabla en 0 y va sorteando juegos sin repetir hasta que salieron todos (después se vuelven a mezclar). Entre juego y juego hay 10 s para ver el resultado y arranca el siguiente solo; el host puede adelantarlo o finalizar el party. Haxblobs entra con equipos al azar y la cancha según cuántos son.
+- **🏁 Podio:** al finalizar el party, o con "Finalizar Time to Break" desde la sala, todos ven el podio con los 3 primeros y el resto de la tabla (los empatados comparten puesto). Después se puede volver a la sala o empezar una sesión nueva con los puntajes en 0.
+
 ## Cómo se juega en la reunión
 
 1. Alguien abre la página, pone su nombre y toca **Crear sala**. Esa persona es el host 👑.

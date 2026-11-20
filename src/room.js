@@ -15,6 +15,11 @@ const FB_SIZES = { '1v1': 1, '3v3': 3, '5v5': 5, '7v7': 7 };
 const FB_MINUTES = [2, 3, 5, 0]; // 0 = sin límite
 const FB_GOALS = [3, 5, 7, 0]; // 0 = sin límite
 
+// Modo party: los juegos se sortean sin repetir hasta que salieron todos; entre juego y juego,
+// PARTY_PAUSE_MS para ver el resultado y arranca el siguiente solo.
+const PARTY_PAUSE_MS = 10000;
+const PARTY_FUTBOL = { minutes: 2, goals: 3 };
+
 function send(ws, msg) {
   if (ws && ws.readyState === 1) ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
 }
@@ -38,6 +43,7 @@ class Room {
     this.lastLobbyRefresh = 0;
     this.setup = null; // 'futbol' mientras está abierta la pantalla de armado
     this.fb = { size: '5v5', minutes: 3, goals: 5, teams: {} }; // teams: id → 0 (Rojo) | 1 (Azul)
+    this.party = null; // { round, bag, last, nextKey, nextAt }
   }
 
   connected() {
@@ -119,14 +125,87 @@ class Room {
       if (this.setup && !Object.keys(this.fb.teams).length) this.randomTeams();
       return this.broadcastRoom();
     }
-    if (msg.t === 'start') return this.start(p, msg.mode);
+    if (msg.t === 'start' && !this.party) return this.start(p, msg.mode);
     if (msg.t === 'end' && this.phase === 'playing') return this.finish();
-    if (msg.t === 'lobby' && this.phase === 'results') {
+    if (msg.t === 'party') return this.handleParty(p, msg.op);
+    // Podio: "Finalizar Time to Break" (o fin del party). Muestra a todos el top 3 y la tabla.
+    if (msg.t === 'podium' && !this.inRound()) return this.showPodium();
+    if (msg.t === 'scores' && msg.op === 'reset' && !this.inRound()) {
+      for (const pl of this.players.values()) pl.score = 0;
+      return this.broadcastRoom();
+    }
+    if (msg.t === 'lobby' && (this.phase === 'results' || this.phase === 'podium') && !this.party) {
       this.phase = 'lobby';
       this.mode = null;
       this.results = null;
       this.broadcastRoom();
     }
+  }
+
+  handleParty(host, op) {
+    if (op === 'start' && !this.party && !this.inRound()) {
+      for (const pl of this.players.values()) pl.score = 0; // el podio refleja solo el party
+      this.setup = null;
+      this.party = { round: 0, bag: [], last: null, nextKey: null, nextAt: 0 };
+      this.party.nextKey = this.partyDraw();
+      return this.partyLaunch(host);
+    }
+    if (!this.party) return;
+    if (op === 'next' && this.phase === 'results') return this.partyLaunch(host);
+    if (op === 'stop' && !this.inRound()) return this.showPodium();
+  }
+
+  // Saca el próximo juego de la bolsa; cuando se vacía, se vuelve a mezclar (sin repetir el último).
+  partyDraw() {
+    const party = this.party;
+    const keys = Object.keys(this.MODES);
+    for (let tries = 0; tries < keys.length * 2; tries++) {
+      if (!party.bag.length) {
+        party.bag = keys.sort(() => Math.random() - 0.5);
+        if (party.bag.length > 1 && party.bag[party.bag.length - 1] === party.last) party.bag.unshift(party.bag.pop());
+      }
+      const key = party.bag.pop();
+      if (this.connected().length >= this.MODES[key].minPlayers) return key;
+    }
+    return null;
+  }
+
+  partyLaunch(host) {
+    const key = this.party.nextKey;
+    if (!key) {
+      send(host?.ws, { t: 'error', msg: 'No hay suficientes jugadores para ningún juego' });
+      this.party = null;
+      return this.broadcastRoom();
+    }
+    this.party.round++;
+    this.party.last = key;
+    this.party.nextKey = null;
+    // Haxblobs en party: equipos al azar y la cancha más chica donde entren todos.
+    const options = key === 'futbol' ? this.partyFutbol() : undefined;
+    this.start(host, key, options);
+    if (!this.inRound()) {
+      // No arrancó (se fue gente y no alcanza el mínimo): sortear otro y reintentar en unos segundos.
+      this.party.round--;
+      this.party.nextKey = this.partyDraw();
+      this.party.nextAt = Date.now() + 3000;
+      this.broadcastRoom();
+    }
+  }
+
+  partyFutbol() {
+    const players = this.connected().sort(() => Math.random() - 0.5);
+    const size = ['1v1', '3v3', '5v5', '7v7'].find((k) => FB_SIZES[k] * 2 >= players.length) || '7v7';
+    const teams = {};
+    players.slice(0, FB_SIZES[size] * 2).forEach((pl, i) => (teams[pl.id] = i % 2));
+    return { size, teams, ...PARTY_FUTBOL };
+  }
+
+  showPodium() {
+    this.party = null;
+    this.setup = null;
+    this.mode = null;
+    this.phase = 'podium';
+    this.broadcastRoom();
   }
 
   // Pantalla de armado del fútbol: cada uno elige su equipo; el host mueve a cualquiera y configura.
@@ -190,20 +269,20 @@ class Room {
     list.forEach((pl, i) => (this.fb.teams[pl.id] = i % 2));
   }
 
-  start(host, key) {
+  start(host, key, preset) {
     if (this.inRound()) return;
     const def = this.MODES[key];
     if (!def) return;
     let players = this.connected();
-    let options;
+    let options = preset;
     if (key === 'futbol') {
       // Juegan los que están en un equipo; el resto mira.
-      players = players.filter((pl) => this.fb.teams[pl.id] === 0 || this.fb.teams[pl.id] === 1);
-      options = { ...this.fb, perTeam: FB_SIZES[this.fb.size] };
+      options ??= { ...this.fb, perTeam: FB_SIZES[this.fb.size] };
+      players = players.filter((pl) => options.teams[pl.id] === 0 || options.teams[pl.id] === 1);
     }
     if (players.length < def.minPlayers) {
       const msg = key === 'futbol' ? 'Armá los equipos: no hay nadie en Rojo ni en Azul' : `${def.Mode.title} necesita al menos ${def.minPlayers} jugadores`;
-      return send(host.ws, { t: 'error', msg });
+      return send(host?.ws, { t: 'error', msg });
     }
     this.modeKey = key;
     this.mode = new def.Mode(players, options);
@@ -229,6 +308,9 @@ class Room {
   // Lo llama el loop global a 60 Hz con el tiempo real transcurrido.
   tick(dt, now) {
     this.checkHost(now);
+    if (this.party && (this.phase === 'results' || this.phase === 'lobby') && now >= this.party.nextAt) {
+      return this.partyLaunch(this.players.get(this.hostId));
+    }
     if (!this.inRound()) {
       // Refresco periódico del lobby para mostrar el ping de cada uno.
       if (now - this.lastLobbyRefresh > LOBBY_REFRESH_MS && this.connected().length) {
@@ -284,6 +366,10 @@ class Room {
     this.results = { t: 'results', mode: this.modeKey, title: r.title, lines: r.lines, round };
     this.phase = 'results';
     this.mode = null;
+    if (this.party) {
+      this.party.nextKey = this.partyDraw();
+      this.party.nextAt = Date.now() + PARTY_PAUSE_MS;
+    }
     this.broadcast(this.results);
     this.broadcastRoom();
   }
@@ -309,6 +395,11 @@ class Room {
       mode: this.modeKey,
       setup: this.setup,
       fb: this.fb,
+      party: this.party && {
+        round: this.party.round,
+        next: this.party.nextKey,
+        nextIn: this.inRound() ? null : Math.max(0, this.party.nextAt - Date.now()),
+      },
       players: [...this.players.values()].map((p) => ({
         id: p.id,
         name: p.name,

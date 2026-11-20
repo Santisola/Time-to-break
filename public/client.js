@@ -158,6 +158,11 @@
         break;
       case 'room':
         S.room = m;
+        if (m.party?.nextIn != null) {
+          const deadline = performance.now() + m.party.nextIn;
+          // Ignorar el redondeo de los refrescos periódicos; reajustar solo si cambió de verdad.
+          if (S.partyDeadline == null || Math.abs(deadline - S.partyDeadline) > 600) S.partyDeadline = deadline;
+        } else S.partyDeadline = null;
         if (m.phase === 'lobby') {
           S.round = null;
           S.results = null;
@@ -450,9 +455,118 @@
     ) ?? prompt('Copiá el link:', link);
   }
 
+  function gamesHtml(r, host, hostName, mode) {
+    return `<h3>${host ? 'Elegí el juego' : 'Juegos'}</h3>
+        <div class="modes">${MODES.map(
+          (m) => `<button class="mode ${m.key === mode.key ? 'sel' : ''}" data-k="${m.key}" ${host ? '' : 'disabled'}>
+            <span class="em">${m.emoji}</span><b>${m.title}</b><small>${m.desc}</small>
+          </button>`
+        ).join('')}</div>
+        ${
+          host
+            ? `<button class="btn primary big" id="start">${mode.key === 'futbol' ? '⚽ Armar el partido' : `¡Jugar ${esc(mode.title)}!`}</button>
+               <div class="host-row">
+                 <button class="btn small" id="partyStart" title="Sortea juegos ronda tras ronda sin repetir. Arranca con la tabla en 0.">🎉 Modo party</button>
+                 <button class="btn small" id="podium" title="Muestra el podio y la tabla final a todos">🏁 Finalizar Time to Break</button>
+                 ${r.phase === 'results' ? '<button class="btn small" id="toLobby">Ocultar resultado</button>' : ''}
+               </div>`
+            : `<p class="wait">Esperando a que ${esc(hostName)} arranque el próximo juego…</p>`
+        }`;
+  }
+
+  // Modo party: en vez de la lista de juegos, qué viene y en cuánto.
+  function partyHtml(r, host) {
+    const next = MODES.find((m) => m.key === r.party.next);
+    const waiting = r.phase === 'results' || r.phase === 'lobby';
+    return `<div class="party">
+        <h3>🎉 Modo party · juego ${r.party.round}</h3>
+        ${
+          waiting && next
+            ? `<div class="party-next"><span class="em">${next.emoji}</span><div><small>Siguiente</small><b>${esc(next.title)}</b></div><span class="party-count" id="partyCount"></span></div>`
+            : ''
+        }
+        <p class="party-note">Los juegos salen al azar sin repetirse hasta que pasan todos. Los puntos se suman en la tabla.</p>
+        ${
+          host
+            ? `<div class="host-row">
+                 ${waiting && next ? '<button class="btn primary" id="partyNext">Siguiente ya ▶</button>' : ''}
+                 <button class="btn small" id="partyStop">🏁 Finalizar party</button>
+               </div>`
+            : ''
+        }
+      </div>`;
+  }
+
+  // Podio: top 3 en escalones (2º, 1º, 3º) y el resto de la tabla debajo.
+  function renderPodium() {
+    const r = S.room;
+    const host = isHost();
+    const ranking = [...r.players].sort((a, b) => b.score - a.score || a.id - b.id);
+    // Puesto con empates: los que tienen el mismo puntaje comparten el número.
+    const rank = (p) => 1 + ranking.filter((q) => q.score > p.score).length;
+    const top = ranking.slice(0, 3);
+    const rest = ranking.slice(3);
+    const place = (p, n) =>
+      p
+        ? `<div class="place p${n}">
+             <div class="pblob" style="--c:${p.color}"><i></i><i></i></div>
+             <b class="pname">${esc(p.name)}</b>
+             <span class="pscore">${p.score} pts</span>
+             <div class="step">${rank(p)}</div>
+           </div>`
+        : '<div class="place empty"></div>';
+    const confetti = Array.from(
+      { length: 36 },
+      (_, i) => `<span style="left:${(i * 37) % 100}%;background:hsl(${(i * 47) % 360},85%,62%);animation-delay:${(i % 12) * 0.18}s;animation-duration:${2.6 + (i % 5) * 0.35}s"></span>`
+    ).join('');
+    const html = `<div class="card panel-card podium-card">
+      <div class="confetti">${confetti}</div>
+      <h2 class="podium-title">🏆 ¡Terminó el Time to Break!</h2>
+      <div class="podium">${place(top[1], 2)}${place(top[0], 1)}${place(top[2], 3)}</div>
+      ${
+        rest.length
+          ? `<ol class="players rest">${rest
+              .map(
+                (p) => `<li class="${p.id === S.me ? 'me' : ''} ${p.connected ? '' : 'off'}">
+                  <span class="rank">${rank(p)}</span>
+                  <span class="dot" style="background:${p.color}"></span>
+                  <span class="nm">${esc(p.name)}${p.id === S.me ? ' (vos)' : ''}</span>
+                  <span class="sc">${p.score}</span>
+                </li>`
+              )
+              .join('')}</ol>`
+          : ''
+      }
+      ${
+        host
+          ? `<div class="host-row podium-actions">
+               <button class="btn small" id="backToRoom">Volver a la sala</button>
+               <button class="btn small" id="newSession">Nueva sesión (puntajes a 0)</button>
+             </div>`
+          : ''
+      }
+    </div>`;
+    const panel = $('panel');
+    panel.innerHTML = html;
+    if ($('backToRoom')) $('backToRoom').onclick = () => sendServer({ t: 'lobby' });
+    if ($('newSession'))
+      $('newSession').onclick = () => {
+        sendServer({ t: 'scores', op: 'reset' });
+        sendServer({ t: 'lobby' });
+      };
+  }
+
+  // Cuenta regresiva del party (el servidor manda cuánto falta; acá se descuenta sola).
+  setInterval(() => {
+    const el = $('partyCount');
+    if (!el || S.partyDeadline == null) return;
+    el.textContent = `en ${Math.max(0, Math.ceil((S.partyDeadline - performance.now()) / 1000))} s`;
+  }, 200);
+
   function renderPanel() {
     if (S.dragging) return; // se redibuja al soltar
     const r = S.room;
+    if (r.phase === 'podium') return renderPodium();
     const host = isHost();
     const players = [...r.players].sort((a, b) => b.score - a.score || a.id - b.id);
     const online = players.filter((p) => p.connected).length;
@@ -478,18 +592,7 @@
           .join('')}</ol>
       </div>
       <div>
-        <h3>${host ? 'Elegí el juego' : 'Juegos'}</h3>
-        <div class="modes">${MODES.map(
-          (m) => `<button class="mode ${m.key === mode.key ? 'sel' : ''}" data-k="${m.key}" ${host ? '' : 'disabled'}>
-            <span class="em">${m.emoji}</span><b>${m.title}</b><small>${m.desc}</small>
-          </button>`
-        ).join('')}</div>
-        ${
-          host
-            ? `<button class="btn primary big" id="start">${mode.key === 'futbol' ? '⚽ Armar el partido' : `¡Jugar ${esc(mode.title)}!`}</button>`
-            : `<p class="wait">Esperando a que ${esc(hostName)} arranque el próximo juego…</p>`
-        }
-        ${host && r.phase === 'results' ? '<div class="host-row"><button class="btn small" id="toLobby">Ocultar resultado</button></div>' : ''}
+        ${r.party ? partyHtml(r, host, hostName) : gamesHtml(r, host, hostName, mode)}
         <p class="keys">${isTouch ? 'Arrastrá el dedo para moverte · 💨 para embestir · ⚽ para patear' : 'Moverse: WASD o flechas · Embestida: Espacio (en fútbol: Shift; Espacio patea)'}</p>
       </div>
     </div></div>`;
@@ -511,6 +614,19 @@
       $('start').onclick = () =>
         sendServer(S.selected === 'futbol' ? { t: 'setup', mode: 'futbol' } : { t: 'start', mode: S.selected });
     if ($('toLobby')) $('toLobby').onclick = () => sendServer({ t: 'lobby' });
+    if ($('partyStart'))
+      $('partyStart').onclick = () => {
+        if (confirm('¿Arrancar el modo party? La tabla de puntajes vuelve a 0.')) sendServer({ t: 'party', op: 'start' });
+      };
+    if ($('podium'))
+      $('podium').onclick = () => {
+        if (confirm('¿Finalizar el Time to Break y mostrar el podio a todos?')) sendServer({ t: 'podium' });
+      };
+    if ($('partyNext')) $('partyNext').onclick = () => sendServer({ t: 'party', op: 'next' });
+    if ($('partyStop'))
+      $('partyStop').onclick = () => {
+        if (confirm('¿Terminar el party y mostrar el podio?')) sendServer({ t: 'party', op: 'stop' });
+      };
   }
 
   $('endBtn').onclick = () => sendServer({ t: 'end' });
