@@ -424,15 +424,37 @@
   }
 
   // Intención de movimiento: sale en el mismo evento en que cambia (y un latido cada 2 s).
+  // Con el dedo, el navegador dispara 60-120 eventos por segundo: se manda como máximo uno cada 33 ms
+  // (el primer cambio sale al instante; el último siempre llega) y la dirección se redondea para que
+  // los temblores del dedo no generen mensajes. Sin esto el servidor corta por exceso de mensajes.
+  const INPUT_MIN_GAP_MS = 33;
+  let inputTimer = null;
+
+  function quantize(d) {
+    const mag = Math.round(Math.min(1, Math.hypot(d.x, d.y)) * 10) / 10;
+    if (!mag) return { x: 0, y: 0 };
+    const step = Math.PI / 32; // 64 direcciones (5,6°)
+    const a = Math.round(Math.atan2(d.y, d.x) / step) * step;
+    return { x: Math.round(Math.cos(a) * mag * 100) / 100, y: Math.round(Math.sin(a) * mag * 100) / 100 };
+  }
+
   function sendInput(force) {
     const phase = S.room?.phase;
     if (!S.ws || S.ws.readyState !== 1 || (phase !== 'countdown' && phase !== 'playing')) return;
-    const d = direction();
-    const x = Math.round(d.x * 100) / 100;
-    const y = Math.round(d.y * 100) / 100;
+    const { x, y } = quantize(direction());
     const sig = `${x},${y}`;
     const now = performance.now();
     if (!force && sig === lastSent && now - lastSentAt < 2000) return;
+    const wait = INPUT_MIN_GAP_MS - (now - lastSentAt);
+    if (wait > 0) {
+      inputTimer ??= setTimeout(() => {
+        inputTimer = null;
+        sendInput(force);
+      }, wait);
+      return;
+    }
+    clearTimeout(inputTimer);
+    inputTimer = null;
     lastSent = sig;
     lastSentAt = now;
     sendServer({ t: 'in', x, y });
@@ -500,7 +522,7 @@
 
   function predictStep(dt, now, others) {
     const phys = S.round.phys;
-    const inp = P.stun ? { x: 0, y: 0 } : direction();
+    const inp = P.stun ? { x: 0, y: 0 } : quantize(direction()); // la misma dirección que recibe el servidor
     P.dashCd = Math.max(0, P.dashCd - dt);
     if (P.dashQueued) {
       P.dashQueued = false;

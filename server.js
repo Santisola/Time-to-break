@@ -47,8 +47,8 @@ const wss = new WebSocketServer({ server, maxPayload: 4096, perMessageDeflate: f
 const rooms = new Map();
 let MODES = null;
 
-const RATE_PER_SEC = 40; // mensajes por segundo por conexión (token bucket)
-const RATE_BURST = 80;
+const RATE_PER_SEC = 60; // mensajes por segundo por conexión (token bucket); el cliente manda ~30 como mucho
+const RATE_BURST = 120;
 const PING_EVERY_MS = 4000;
 const DEAD_AFTER_MS = 30000;
 
