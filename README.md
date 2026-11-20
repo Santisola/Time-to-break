@@ -51,7 +51,9 @@ npm install        # solo la primera vez
 npm run jugar
 ```
 
-Imprime un link tipo `https://palabras-al-azar.trycloudflare.com`: se pega en el chat de la meet y listo. Dejá la terminal abierta mientras juegan; `Ctrl+C` corta todo.
+En unos 15 segundos imprime un link tipo `https://palabras-al-azar.trycloudflare.com`: se pega en el chat de la meet y listo. Dejá la terminal abierta mientras juegan; `Ctrl+C` corta todo. Funciona en Linux, macOS y Windows.
+
+El link se muestra recién cuando ya abre desde internet: Cloudflare lo crea unos segundos después de anunciarlo, y si alguien lo abre antes, su DNS se guarda el "no existe" por un minuto.
 
 - **Latencia:** Cloudflare tiene datacenter en Buenos Aires (Ezeiza), así que todo queda en Argentina. Medido: ~10 ms ida y vuelta desde la misma compu; para el resto del equipo, del orden de 15–30 ms.
 - El link **cambia cada vez** que se corre.
