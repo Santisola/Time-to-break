@@ -29,6 +29,7 @@ class BaseMode {
     this.time = 0;
     this.duration = 90;
     this.events = [];
+    this.frozen = true;
     this.phys = { grip: 7, maxV: 260, dashPow: 600, bounded: true };
     this.bodies = shuffle(
       players.map((p) => ({
@@ -44,7 +45,6 @@ class BaseMode {
         dashCd: 0,
         dashT: 0,
         dashCooldown: 1.4,
-        lastDash: p.dashSeq,
         stun: 0,
       }))
     );
@@ -62,9 +62,33 @@ class BaseMode {
     return Math.max(0, this.duration - this.time);
   }
 
+  // Embestida: se aplica en cuanto llega el mensaje, sin esperar al próximo paso.
+  dash(id) {
+    const b = this.byId(id);
+    if (!b || !b.alive || this.frozen || b.stun > 0 || b.dashCd > 0 || !b.p.connected) return;
+    let dx = b.p.input.x;
+    let dy = b.p.input.y;
+    if (!dx && !dy) {
+      const s = Math.hypot(b.vx, b.vy);
+      if (s > 20) {
+        dx = b.vx / s;
+        dy = b.vy / s;
+      }
+    }
+    const len = Math.hypot(dx, dy);
+    if (!len) return;
+    b.vx += (dx / len) * this.phys.dashPow;
+    b.vy += (dy / len) * this.phys.dashPow;
+    b.dashCd = b.dashCooldown;
+    b.dashT = 0.25;
+  }
+
   // El cliente replica esta misma física para predecir su propio blob (public/client.js → predictStep).
   move(dt, frozen) {
-    const { grip, maxV, dashPow } = this.phys;
+    this.frozen = frozen;
+    const { grip, maxV } = this.phys;
+    // Frenado exponencial: da lo mismo simular a 60 Hz en el servidor que al ritmo de pantalla en el cliente.
+    const k = 1 - Math.exp(-grip * dt);
     for (const b of this.bodies) {
       if (!b.alive) continue;
       if (!frozen) {
@@ -75,28 +99,6 @@ class BaseMode {
       const active = !frozen && b.stun <= 0 && b.p.connected;
       const ix = active ? b.p.input.x : 0;
       const iy = active ? b.p.input.y : 0;
-
-      if (b.p.dashSeq !== b.lastDash) {
-        b.lastDash = b.p.dashSeq;
-        let dx = ix;
-        let dy = iy;
-        if (!dx && !dy) {
-          const s = Math.hypot(b.vx, b.vy);
-          if (s > 20) {
-            dx = b.vx / s;
-            dy = b.vy / s;
-          }
-        }
-        const len = Math.hypot(dx, dy);
-        if (active && b.dashCd <= 0 && len > 0) {
-          b.vx += (dx / len) * dashPow;
-          b.vy += (dy / len) * dashPow;
-          b.dashCd = b.dashCooldown;
-          b.dashT = 0.25;
-        }
-      }
-
-      const k = Math.min(1, grip * dt);
       b.vx += (ix * maxV * b.speed - b.vx) * k;
       b.vy += (iy * maxV * b.speed - b.vy) * k;
       b.x += b.vx * dt;
@@ -224,21 +226,22 @@ class BaseMode {
 
   /**
    * Estado por tick que viaja por el canal no confiable (si se pierde uno, llega el siguiente).
-   * b: tuplas [id, x, y, flags, cooldown 0-9, equipo] con flags 1=afuera 2=embistiendo 4=aturdido 8=zombie.
-   * v: datos que solo necesita cada jugador para predecir su propio blob: [vx, vy, velocidad, cooldown].
+   * b: tuplas [id, x, y, vx, vy, flags, cooldown 0-9, equipo] con flags 1=afuera 2=embistiendo 4=aturdido 8=zombie.
+   *    La velocidad permite extrapolar a los demás sin buffer de interpolación.
+   * v: lo que solo necesita cada jugador para predecir su propio blob: [velocidad, cooldown de embestida].
    */
   snapshot() {
     const b = [];
     const v = {};
     for (const body of this.bodies) {
       const o = this.bodyState(body);
-      b.push([o.i, o.x, o.y, (o.o ? 1 : 0) | (o.d ? 2 : 0) | (o.s ? 4 : 0) | (o.z ? 8 : 0), o.c || 0, o.tm ?? 0]);
-      v[o.i] = [o.vx, o.vy, o.sp || 1, o.dc || 1.4];
+      b.push([o.i, o.x, o.y, o.vx, o.vy, (o.o ? 1 : 0) | (o.d ? 2 : 0) | (o.s ? 4 : 0) | (o.z ? 8 : 0), o.c || 0, o.tm ?? 0]);
+      v[o.i] = [o.sp || 1, o.dc || 1.4];
     }
     return { tl: Math.ceil(this.timeLeft()), b, x: this.extra(), v };
   }
 
-  // Lo que no se puede perder (eventos, celdas pintadas): viaja por el canal confiable.
+  // Lo que se acumuló desde el último snapshot y no se puede perder (eventos, celdas pintadas).
   reliable() {
     const ev = this.events.splice(0);
     const g = this.reliableExtra();

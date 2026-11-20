@@ -1,12 +1,7 @@
-import { Net } from './net.js';
-import { HostEngine } from './host.js';
-
 (() => {
   const W = 1600;
   const H = 900;
   const R = 22;
-  const INTERP_DELAY = 70;
-  const SELF_DELAY = 34;
 
   const MODES = [
     { key: 'sumo', emoji: '🫧', title: 'Sumo de blobs', desc: 'Empujá a todos fuera de la plataforma, que se va achicando. Gana el último en pie.' },
@@ -54,7 +49,8 @@ import { HostEngine } from './host.js';
     name: '',
     room: null,
     round: null,
-    snaps: [],
+    snap: null,
+    ents: new Map(),
     grid: null,
     results: null,
     feed: [],
@@ -139,7 +135,6 @@ import { HostEngine } from './host.js';
       case 'joined':
         S.me = m.id;
         S.code = m.code;
-        S.net.rejoined();
         history.replaceState(null, '', `?sala=${m.code}`);
         $('home').classList.add('hidden');
         homeMsg('');
@@ -167,23 +162,27 @@ import { HostEngine } from './host.js';
           S.results = null;
         }
         if (m.mode && !S.selectedByMe) S.selected = m.mode;
-        S.net.sync(m, S.me);
-        syncHost();
-        // Entré (o volví) con una ronda en curso: pedirle al host el estado.
-        if (!S.host && S.net.hostId !== null && (m.phase === 'countdown' || m.phase === 'playing') && !S.round) hello();
         ui();
         break;
-      case 'sig':
-        S.net.signal(m.from, m.d);
+      case 'round':
+        P.active = false;
+        S.round = m;
+        S.snap = null;
+        S.ents.clear();
+        S.fallen.clear();
+        S.feed = [];
+        S.results = null;
+        S.grid = m.info.grid ? Uint8Array.from(m.info.grid) : null;
+        ui();
         break;
-      case 'relay':
-        S.net.receive(m.from, m.d);
+      case 's':
+        onSnapshot(m);
         break;
-      case 'aborted':
-        S.host?.abort();
-        S.round = null;
-        toast(m.msg);
+      case 'eco': {
+        const sample = performance.now() - m.c;
+        P.rtt = P.rtt ? P.rtt * 0.75 + sample * 0.25 : sample;
         break;
+      }
       case 'results':
         S.results = m;
         ui();
@@ -191,78 +190,53 @@ import { HostEngine } from './host.js';
     }
   }
 
-  // Lo que manda el host (por WebRTC, por el servidor o, si el host sos vos, directo del worker).
-  function onGameMessage(m) {
-    switch (m.t) {
-      case 'round':
-        P.active = false;
-        S.round = m;
-        S.snaps = [];
-        S.fallen.clear();
-        S.feed = [];
-        S.results = null;
-        S.grid = m.info.grid ? Uint8Array.from(m.info.grid) : null;
-        ui();
-        break;
-      case 's': {
-        if (!S.round) return;
-        m.at = performance.now();
-        // Tuplas [id, x, y, flags, cooldown, equipo] → objetos (ver BaseMode.snapshot).
-        m.b = m.b.map(([i, x, y, f, c, tm]) => ({ i, x, y, o: f & 1, d: f & 2, s: f & 4, z: f & 8, c, tm }));
-        if (m.v) {
-          const mine = m.b.find((b) => b.i === S.me);
-          if (mine) [mine.vx, mine.vy, mine.sp, mine.dc] = m.v;
-        }
-        S.snaps.push(m);
-        if (S.snaps.length > 40) S.snaps.shift();
-        reconcile(m);
-        hud(m);
-        break;
-      }
-      case 'x':
-        if (m.g && S.grid) for (let i = 0; i < m.g.length; i += 2) S.grid[m.g[i]] = m.g[i + 1];
-        for (const text of m.ev || []) S.feed.push({ text, at: performance.now() });
-        break;
-      case 'pong': {
-        const sample = performance.now() - m.c;
-        P.rtt = P.rtt ? P.rtt * 0.75 + sample * 0.25 : sample;
-        break;
-      }
-    }
-  }
-
-  function syncHost() {
-    if (S.net.isHost && !S.host) {
-      S.host = new HostEngine(S.net, {
-        deliver: onGameMessage,
-        toServer: sendServer,
-        onError: toast,
-      });
-      P.rtt = 0;
-    } else if (!S.net.isHost && S.host) {
-      S.host.destroy();
-      S.host = null;
-    }
-    S.host?.setRoom(S.room, S.me);
-  }
-
-  function hello() {
+  // Sin buffer de interpolación: se dibuja el último estado, extrapolado con la velocidad de cada uno.
+  function onSnapshot(m) {
+    if (!S.round) return;
     const now = performance.now();
-    if (now - (hello.last || 0) < 1000) return;
-    hello.last = now;
-    S.net.toHost({ t: 'hello' }, true);
+    m.at = now;
+    // Tuplas [id, x, y, vx, vy, flags, cooldown, equipo] → objetos (ver BaseMode.snapshot).
+    m.b = m.b.map(([i, x, y, vx, vy, f, c, tm]) => ({ i, x, y, vx, vy, o: f & 1, d: f & 2, s: f & 4, z: f & 8, c, tm }));
+    for (const o of m.b) {
+      const e = S.ents.get(o.i);
+      if (e) {
+        // Lo que se estaba dibujando vs. el dato nuevo: esa diferencia se disuelve en ~60 ms en vez de saltar.
+        const shown = entityPos(e, now);
+        const ox = shown.x - o.x;
+        const oy = shown.y - o.y;
+        const far = Math.hypot(ox, oy) > 120;
+        S.ents.set(o.i, { ...o, at: now, ox: far ? 0 : ox, oy: far ? 0 : oy });
+      } else {
+        S.ents.set(o.i, { ...o, at: now, ox: 0, oy: 0 });
+      }
+    }
+    if (m.v) {
+      const mine = m.b.find((b) => b.i === S.me);
+      if (mine) [mine.sp, mine.dc] = m.v;
+    }
+    if (m.g && S.grid) for (let i = 0; i < m.g.length; i += 2) S.grid[m.g[i]] = m.g[i + 1];
+    for (const text of m.ev || []) S.feed.push({ text, at: now });
+    S.snap = m;
+    reconcile(m);
+    hud(m);
+  }
+
+  const EXTRAPOLATE_MAX = 0.1; // no adivinar más de 100 ms si se atrasa un snapshot
+  const SMOOTH_MS = 60;
+
+  function entityPos(e, now) {
+    const age = Math.min(EXTRAPOLATE_MAX, (now - e.at) / 1000);
+    const fade = Math.exp(-(now - e.at) / SMOOTH_MS);
+    const moving = !e.o;
+    return {
+      x: e.x + (moving ? e.vx * age : 0) + e.ox * fade,
+      y: e.y + (moving ? e.vy * age : 0) + e.oy * fade,
+    };
   }
 
   function sendServer(msg) {
     if (S.ws?.readyState === 1) S.ws.send(JSON.stringify(msg));
   }
-
-  S.net = new Net({
-    sendServer,
-    onFromHost: onGameMessage,
-    onFromPeer: (id, m) => S.host?.fromPeer(id, m),
-    onStatus: (mode) => sendServer({ t: 'net', mode }),
-  });
 
   // ---------- Paneles ----------
   function ui() {
@@ -276,10 +250,11 @@ import { HostEngine } from './host.js';
     if (S.room && !inRound) renderPanel();
   }
 
-  function netTag(net) {
-    if (net === 'p2p') return '<span class="net p2p" title="Conexión directa con el host">directo</span>';
-    if (net === 'relay') return '<span class="net relay" title="Su red no permite conexión directa: va por el servidor">vía servidor</span>';
-    return '<span class="net" title="Armando la conexión con el host">conectando…</span>';
+  // Ping de cada jugador con el servidor: verde < 60 ms, amarillo < 120, rojo arriba.
+  function pingTag(rtt) {
+    if (rtt == null) return '';
+    const cls = rtt < 60 ? 'p2p' : rtt < 120 ? 'relay' : 'bad';
+    return `<span class="net ${cls}" title="Latencia con el servidor">${rtt} ms</span>`;
   }
 
   function renderPanel() {
@@ -314,7 +289,7 @@ import { HostEngine } from './host.js';
               <span class="rank">${i + 1}</span>
               <span class="dot" style="background:${p.color}"></span>
               <span class="nm">${esc(p.name)}${p.id === r.hostId ? ' 👑' : ''}${p.id === S.me ? ' (vos)' : ''}</span>
-              ${p.connected && p.id !== r.hostId ? netTag(p.net) : ''}
+              ${p.connected ? pingTag(p.rtt) : ''}
               <span class="sc">${p.score}</span>
             </li>`
           )
@@ -356,11 +331,11 @@ import { HostEngine } from './host.js';
         renderPanel();
       };
     });
-    if ($('start')) $('start').onclick = () => S.host?.start(S.selected);
+    if ($('start')) $('start').onclick = () => sendServer({ t: 'start', mode: S.selected });
     if ($('toLobby')) $('toLobby').onclick = () => sendServer({ t: 'lobby' });
   }
 
-  $('endBtn').onclick = () => S.host?.end();
+  $('endBtn').onclick = () => sendServer({ t: 'end' });
 
   // ---------- HUD ----------
   const hudCache = {};
@@ -395,6 +370,8 @@ import { HostEngine } from './host.js';
       if (mine) banner = '';
     }
     setHud('hudInfo', info);
+    const ping = Math.round(P.rtt);
+    setHud('hudPing', P.rtt ? `<span class="net ${ping < 60 ? 'p2p' : ping < 120 ? 'relay' : 'bad'}">${ping} ms</span>` : '');
     $('banner').classList.toggle('hidden', !banner);
     setHud('banner', esc(banner));
 
@@ -427,7 +404,6 @@ import { HostEngine } from './host.js';
 
   // ---------- Input ----------
   const keys = new Set();
-  let dashSeq = 0;
   let lastSent = '';
   let lastSentAt = 0;
   const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
@@ -446,30 +422,31 @@ import { HostEngine } from './host.js';
     return len > 1 ? { x: x / len, y: y / len } : { x, y };
   }
 
+  // Intención de movimiento: sale en el mismo evento en que cambia (y un latido cada 2 s).
   function sendInput(force) {
     const phase = S.room?.phase;
     if (!S.ws || S.ws.readyState !== 1 || (phase !== 'countdown' && phase !== 'playing')) return;
     const d = direction();
     const x = Math.round(d.x * 100) / 100;
     const y = Math.round(d.y * 100) / 100;
-    const sig = `${x},${y},${dashSeq}`;
+    const sig = `${x},${y}`;
     const now = performance.now();
-    if (!force && sig === lastSent && now - lastSentAt < 250) return;
+    if (!force && sig === lastSent && now - lastSentAt < 2000) return;
     lastSent = sig;
     lastSentAt = now;
-    if (S.host) S.host.input(x, y, dashSeq);
-    else S.net.toHost({ t: 'input', x, y, d: dashSeq });
+    sendServer({ t: 'in', x, y });
   }
 
+  // Acción: directo desde el evento de teclado; el servidor la aplica al llegar.
   function dash() {
-    dashSeq++;
     if (P.active) P.dashQueued = true;
-    sendInput(true);
+    sendInput();
+    if (S.room?.phase === 'playing') sendServer({ t: 'dash' });
   }
 
+  // Medición de latencia (eco): alimenta la predicción, el ping del HUD y el del lobby.
   setInterval(() => {
-    // Latencia hasta el host (para la predicción). El host simula en su propio navegador: 0.
-    if (S.ws?.readyState === 1 && S.me && !S.host) S.net.toHost({ t: 'ping', c: performance.now() });
+    if (S.ws?.readyState === 1 && S.me) sendServer({ t: 'eco', c: performance.now(), r: P.rtt ? Math.round(P.rtt) : null });
   }, 2000);
 
   // ---------- Predicción ----------
@@ -491,8 +468,11 @@ import { HostEngine } from './host.js';
       P.dashCd = 0;
       return reset();
     }
+    // Si la predicción estuvo frenada (pestaña de fondo, rAF pausado), no hay historia con qué comparar:
+    // tomar directo la posición del servidor.
+    if (!P.lastStep || performance.now() - P.lastStep > 250) return reset();
     // El estado que manda el servidor incluye tus teclas de hace ~1 RTT: comparalo con tu predicción de ese momento.
-    const target = performance.now() - P.rtt - 17;
+    const target = performance.now() - P.rtt - 20;
     let past = null;
     for (const h of P.hist) {
       if (h.t > target) break;
@@ -534,8 +514,8 @@ import { HostEngine } from './host.js';
         P.dashCd = P.cooldown;
       }
     }
-    // Mismo decaimiento por tick que el servidor (30 Hz), escalado al dt del frame.
-    const k = 1 - Math.pow(1 - Math.min(1, phys.grip / 30), dt * 30);
+    // Mismo frenado exponencial que el servidor (BaseMode.move).
+    const k = 1 - Math.exp(-phys.grip * dt);
     P.vx += (inp.x * phys.maxV * P.speed - P.vx) * k;
     P.vy += (inp.y * phys.maxV * P.speed - P.vy) * k;
     P.x += P.vx * dt;
@@ -571,6 +551,7 @@ import { HostEngine } from './host.js';
       P.y = Math.max(R, Math.min(H - R, P.y));
     }
     P.hist.push({ t: now, x: P.x, y: P.y, vx: P.vx, vy: P.vy });
+    P.lastStep = now;
     while (P.hist.length && now - P.hist[0].t > 1500) P.hist.shift();
   }
 
@@ -629,28 +610,9 @@ import { HostEngine } from './host.js';
   // ---------- Dibujo ----------
   const ctx = cv.getContext('2d');
 
-  function interpolate(now, delay) {
-    const sn = S.snaps;
-    const rt = now - delay;
-    let a = sn[sn.length - 1];
-    let b = a;
-    for (let i = sn.length - 1; i > 0; i--) {
-      if (sn[i - 1].at <= rt) {
-        a = sn[i - 1];
-        b = sn[i];
-        break;
-      }
-    }
-    if (sn[0].at > rt) a = b = sn[0];
-    const t = a === b ? 1 : Math.max(0, Math.min(1, (rt - a.at) / (b.at - a.at)));
-    const prev = new Map(a.b.map((o) => [o.i, o]));
-    const bodies = b.b.map((o) => {
-      const p = prev.get(o.i) || o;
-      return { ...o, x: p.x + (o.x - p.x) * t, y: p.y + (o.y - p.y) * t };
-    });
-    let extra = b.x;
-    if (a.x?.r != null && b.x?.r != null) extra = { ...b.x, r: a.x.r + (b.x.r - a.x.r) * t };
-    return { bodies, extra };
+  // Posición a dibujar de cada jugador: último snapshot + extrapolación (ver entityPos).
+  function currentBodies(now) {
+    return S.snap.b.map((o) => ({ ...o, ...entityPos(S.ents.get(o.i), now) }));
   }
 
   function roundRect(x, y, w, h, r) {
@@ -957,7 +919,7 @@ import { HostEngine } from './host.js';
     ctx.fillStyle = '#0f1020';
     ctx.fillRect(0, 0, cw, ch);
 
-    const inRound = S.round && S.snaps.length && (S.room?.phase === 'countdown' || S.room?.phase === 'playing');
+    const inRound = S.round && S.snap && (S.room?.phase === 'countdown' || S.room?.phase === 'playing');
     if (!inRound) return drawIdle(now, cw, ch);
 
     const top = 56;
@@ -966,18 +928,14 @@ import { HostEngine } from './host.js';
     const oy = top + (ch - top - H * scale) / 2;
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
 
-    const { bodies, extra } = interpolate(now, INTERP_DELAY);
+    const bodies = currentBodies(now);
+    const extra = S.snap.x;
     const dt = Math.min(0.05, (now - (frame.last || now)) / 1000);
     frame.last = now;
     const mineIdx = bodies.findIndex((o) => o.i === S.me);
-    if (mineIdx >= 0) {
-      if (P.active) {
-        predictStep(dt, now, bodies);
-        bodies[mineIdx] = { ...bodies[mineIdx], x: P.x, y: P.y };
-      } else {
-        const mine = interpolate(now, SELF_DELAY).bodies.find((o) => o.i === S.me);
-        if (mine) bodies[mineIdx] = mine;
-      }
+    if (mineIdx >= 0 && P.active) {
+      predictStep(dt, now, bodies);
+      bodies[mineIdx] = { ...bodies[mineIdx], x: P.x, y: P.y };
     }
     if (S.round.mode === 'sumo') drawSumo(extra, now);
     else if (S.round.mode === 'infeccion') drawInfeccion();

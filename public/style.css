@@ -634,3 +634,7 @@ h3 {
 .net.relay {
   color: var(--accent-2);
 }
+
+.net.bad {
+  color: var(--accent);
+}
