@@ -30,7 +30,7 @@ class Infeccion extends BaseMode {
   constructor(players) {
     super(players);
     this.duration = 100;
-    this.phys = { grip: 8, maxV: 250, dashPow: 520, bounded: true };
+    this.phys = { grip: 8, maxV: 250, dashPow: 520, bounce: 0.3, dashBoost: 0, bounded: true };
     this.infections = {};
     const zombies = Math.max(1, Math.round(this.bodies.length / 6));
     const zombieSpots = [
@@ -77,8 +77,7 @@ class Infeccion extends BaseMode {
         human.stun = 1;
         this.infections[zombie.id] = (this.infections[zombie.id] || 0) + 1;
         this.event(`🧟 ${zombie.p.name} contagió a ${human.p.name}`);
-      },
-      { bounce: 0.3 }
+      }
     );
     this.walls(WALLS);
     this.bounds();

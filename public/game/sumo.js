@@ -12,7 +12,7 @@ class Sumo extends BaseMode {
   constructor(players) {
     super(players);
     this.duration = 90;
-    this.phys = { grip: 3.2, maxV: 260, dashPow: 560, bounded: false };
+    this.phys = { grip: 3.2, maxV: 260, dashPow: 560, bounce: 0.9, dashBoost: 260, bounded: false };
     this.cx = W / 2;
     this.cy = H / 2;
     this.arenaR = R_START;
@@ -39,8 +39,7 @@ class Sumo extends BaseMode {
         if (impact < 60) return;
         a.lastHit = { by: b, at: this.time };
         b.lastHit = { by: a, at: this.time };
-      },
-      { bounce: 0.9, dashBoost: 260 }
+      }
     );
 
     for (const b of this.bodies) {

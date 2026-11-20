@@ -30,7 +30,7 @@ class BaseMode {
     this.duration = 90;
     this.events = [];
     this.frozen = true;
-    this.phys = { grip: 7, maxV: 260, dashPow: 600, bounded: true };
+    this.phys = { grip: 7, maxV: 260, dashPow: 600, bounce: 0.6, dashBoost: 0, bounded: true };
     this.bodies = shuffle(
       players.map((p) => ({
         id: p.id,
@@ -107,7 +107,9 @@ class BaseMode {
   }
 
   // Choques entre jugadores. onTouch(a, b, impacto) se llama por cada par que se toca.
-  collide(onTouch, { bounce = 0.6, dashBoost = 0 } = {}) {
+  // Choques entre jugadores. El cliente replica la misma respuesta para su blob (client.js → predictStep).
+  collide(onTouch) {
+    const { bounce, dashBoost } = this.phys;
     const list = this.bodies.filter((b) => b.alive);
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {

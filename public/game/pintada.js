@@ -31,7 +31,7 @@ class Pintada extends BaseMode {
   constructor(players) {
     super(players);
     this.duration = 90;
-    this.phys = { grip: 7, maxV: 270, dashPow: 600, bounded: true };
+    this.phys = { grip: 7, maxV: 270, dashPow: 600, bounce: 0.6, dashBoost: 140, bounded: true };
     this.teamCount = this.bodies.length >= 12 ? 4 : 2;
     this.teams = TEAMS.slice(0, this.teamCount);
     this.grid = new Uint8Array(COLS * ROWS);
@@ -70,7 +70,7 @@ class Pintada extends BaseMode {
 
   tick(dt, frozen) {
     this.move(dt, frozen);
-    this.collide(null, { bounce: 0.6, dashBoost: 140 });
+    this.collide(null);
     this.bounds();
     if (frozen) return;
 

@@ -61,7 +61,7 @@
 
   // Predicción local de tu blob: se mueve al instante con la misma física que el servidor
   // y se corrige de a poco comparando contra donde estabas hace un RTT.
-  const P = { active: false, x: 0, y: 0, vx: 0, vy: 0, dashCd: 0, dashQueued: false, cooldown: 1.4, speed: 1, stun: false, hist: [], rtt: 0 };
+  const P = { active: false, x: 0, y: 0, vx: 0, vy: 0, dashCd: 0, dashQueued: false, cooldown: 1.4, speed: 1, stun: false, hist: [], rtt: 0, ox: 0, oy: 0, dashT: 0, hitBy: new Map() };
 
   window.__ttb = { S, P }; // para depurar desde la consola
 
@@ -407,6 +407,7 @@
   let lastSent = '';
   let lastSentAt = 0;
   const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
+  window.__ttb.joy = joy;
 
   function direction() {
     let x = 0;
@@ -461,7 +462,7 @@
     P.speed = mine.sp || 1;
     P.cooldown = mine.dc || 1.4;
     const reset = () => {
-      Object.assign(P, { x: mine.x, y: mine.y, vx: mine.vx, vy: mine.vy, hist: [] });
+      Object.assign(P, { x: mine.x, y: mine.y, vx: mine.vx, vy: mine.vy, ox: 0, oy: 0, hist: [] });
     };
     if (!P.active) {
       P.active = true;
@@ -471,8 +472,9 @@
     // Si la predicción estuvo frenada (pestaña de fondo, rAF pausado), no hay historia con qué comparar:
     // tomar directo la posición del servidor.
     if (!P.lastStep || performance.now() - P.lastStep > 250) return reset();
-    // El estado que manda el servidor incluye tus teclas de hace ~1 RTT: comparalo con tu predicción de ese momento.
-    const target = performance.now() - P.rtt - 20;
+    // El estado que manda el servidor incluye tus teclas de hace ~1 RTT (+ ~8 ms de espera al próximo paso):
+    // se compara con lo que se predijo para ese momento.
+    const target = performance.now() - P.rtt - 8;
     let past = null;
     for (const h of P.hist) {
       if (h.t > target) break;
@@ -481,15 +483,19 @@
     if (!past) return;
     const ex = mine.x - past.x;
     const ey = mine.y - past.y;
+    P.err = Math.hypot(ex, ey); // para depurar: cuánto se equivocó la predicción
     if (Math.hypot(ex, ey) > 160) return reset();
-    const k = 0.3;
-    const fix = { x: ex * k, y: ey * k, vx: (mine.vx - past.vx) * k, vy: (mine.vy - past.vy) * k };
+    // Corrección completa e inmediata (un empujón se siente apenas llega); lo que se dibuja se desliza
+    // hacia la posición corregida en ~50 ms para que no salte.
+    const fix = { x: ex, y: ey, vx: mine.vx - past.vx, vy: mine.vy - past.vy };
     for (const s of [P, ...P.hist]) {
       s.x += fix.x;
       s.y += fix.y;
       s.vx += fix.vx;
       s.vy += fix.vy;
     }
+    P.ox -= fix.x;
+    P.oy -= fix.y;
   }
 
   function predictStep(dt, now, others) {
@@ -512,8 +518,10 @@
         P.vx += (dx / len) * phys.dashPow;
         P.vy += (dy / len) * phys.dashPow;
         P.dashCd = P.cooldown;
+        P.dashT = 0.25;
       }
     }
+    P.dashT = Math.max(0, (P.dashT || 0) - dt);
     // Mismo frenado exponencial que el servidor (BaseMode.move).
     const k = 1 - Math.exp(-phys.grip * dt);
     P.vx += (inp.x * phys.maxV * P.speed - P.vx) * k;
@@ -521,14 +529,32 @@
     P.x += P.vx * dt;
     P.y += P.vy * dt;
 
+    // Choques con los demás: la misma respuesta que BaseMode.collide, aplicada solo a tu blob
+    // (a los demás los mueve el servidor). Rebote al instante en vez de esperar la ida y vuelta.
     for (const o of others) {
       if (o.o || o.i === S.me) continue;
-      const dx = P.x - o.x;
-      const dy = P.y - o.y;
+      const dx = o.x - P.x;
+      const dy = o.y - P.y;
       const d = Math.hypot(dx, dy);
-      if (d > 0 && d < R * 2) {
-        P.x += (dx / d) * (R * 2 - d) * 0.5;
-        P.y += (dy / d) * (R * 2 - d) * 0.5;
+      if (!d || d >= R * 2) continue;
+      const nx = dx / d;
+      const ny = dy / d;
+      P.x -= nx * (R * 2 - d); // el otro no se mueve acá: salir del todo
+      P.y -= ny * (R * 2 - d);
+      const rv = (o.vx - P.vx) * nx + (o.vy - P.vy) * ny;
+      if (rv < 0) {
+        const imp = (-(1 + phys.bounce) * rv) / 2;
+        P.vx -= imp * nx;
+        P.vy -= imp * ny;
+      }
+      if (phys.dashBoost) {
+        if (P.dashT > 0) P.dashT = 0; // tu embestida se gasta en el impacto
+        // Su embestida te empuja una sola vez por choque.
+        if (o.d && now - (P.hitBy.get(o.i) || 0) > 300) {
+          P.hitBy.set(o.i, now);
+          P.vx -= nx * phys.dashBoost;
+          P.vy -= ny * phys.dashBoost;
+        }
       }
     }
     for (const w of S.round.info.walls || []) {
@@ -552,6 +578,9 @@
     }
     P.hist.push({ t: now, x: P.x, y: P.y, vx: P.vx, vy: P.vy });
     P.lastStep = now;
+    const fade = Math.exp(-dt / 0.05);
+    P.ox *= fade;
+    P.oy *= fade;
     while (P.hist.length && now - P.hist[0].t > 1500) P.hist.shift();
   }
 
@@ -935,7 +964,7 @@
     const mineIdx = bodies.findIndex((o) => o.i === S.me);
     if (mineIdx >= 0 && P.active) {
       predictStep(dt, now, bodies);
-      bodies[mineIdx] = { ...bodies[mineIdx], x: P.x, y: P.y };
+      bodies[mineIdx] = { ...bodies[mineIdx], x: P.x + P.ox, y: P.y + P.oy };
     }
     if (S.round.mode === 'sumo') drawSumo(extra, now);
     else if (S.round.mode === 'infeccion') drawInfeccion();
