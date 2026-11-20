@@ -7,6 +7,7 @@
     { key: 'sumo', emoji: '🫧', title: 'Sumo de blobs', desc: 'Empujá a todos fuera de la plataforma, que se va achicando. Gana el último en pie.' },
     { key: 'infeccion', emoji: '🧟', title: 'Infección', desc: 'Los zombies contagian con solo tocarte. Aguantá vivo hasta que se acabe el tiempo.' },
     { key: 'pintada', emoji: '🎨', title: 'Pintada', desc: 'Pintá el piso con el color de tu equipo. Gana el que cubre más área.' },
+    { key: 'futbol', emoji: '⚽', title: 'Haxblobs', desc: 'Fútbol Rojo contra Azul. Espacio patea (más fuerte cuanto más pegada), Shift embiste. Armás equipos, cancha y duración.' },
   ];
 
   const $ = (id) => document.getElementById(id);
@@ -168,6 +169,7 @@
         P.active = false;
         S.round = m;
         S.snap = null;
+        S.ball = null;
         S.ents.clear();
         S.fallen.clear();
         S.feed = [];
@@ -196,7 +198,7 @@
     const now = performance.now();
     m.at = now;
     // Tuplas [id, x, y, vx, vy, flags, cooldown, equipo] → objetos (ver BaseMode.snapshot).
-    m.b = m.b.map(([i, x, y, vx, vy, f, c, tm]) => ({ i, x, y, vx, vy, o: f & 1, d: f & 2, s: f & 4, z: f & 8, c, tm }));
+    m.b = m.b.map(([i, x, y, vx, vy, f, c, tm]) => ({ i, x, y, vx, vy, o: f & 1, d: f & 2, s: f & 4, z: f & 8, k: f & 16, dz: f & 32, c, tm }));
     for (const o of m.b) {
       const e = S.ents.get(o.i);
       if (e) {
@@ -216,6 +218,19 @@
     }
     if (m.g && S.grid) for (let i = 0; i < m.g.length; i += 2) S.grid[m.g[i]] = m.g[i + 1];
     for (const text of m.ev || []) S.feed.push({ text, at: now });
+    if (m.x?.ball) {
+      const [x, y, vx, vy] = m.x.ball;
+      const prev = S.ball;
+      let ox = 0;
+      let oy = 0;
+      if (prev) {
+        const shown = entityPos(prev, now);
+        ox = shown.x - x;
+        oy = shown.y - y;
+        if (Math.hypot(ox, oy) > 120) ox = oy = 0; // saque del medio: sin deslizar
+      }
+      S.ball = { x, y, vx, vy, at: now, ox, oy };
+    }
     S.snap = m;
     reconcile(m);
     hud(m);
@@ -247,6 +262,7 @@
     $('center').classList.toggle('hidden', !inRound);
     $('endBtn').classList.toggle('hidden', !(inRound && isHost()));
     $('touchDash').classList.toggle('hidden', !(inRound && isTouch));
+    $('touchKick').classList.toggle('hidden', !(inRound && isTouch && S.round?.mode === 'futbol'));
     if (S.room && !inRound) renderPanel();
   }
 
@@ -257,19 +273,11 @@
     return `<span class="net ${cls}" title="Latencia con el servidor">${rtt} ms</span>`;
   }
 
-  function renderPanel() {
-    const r = S.room;
-    const host = isHost();
-    const players = [...r.players].sort((a, b) => b.score - a.score || a.id - b.id);
-    const online = players.filter((p) => p.connected).length;
-    const mode = MODES.find((m) => m.key === S.selected) || MODES[0];
-    const hostName = playerById(r.hostId)?.name || 'el host';
-
-    let html = '<div class="card panel-card">';
-    if (r.phase === 'results' && S.results) {
-      const res = S.results;
-      const title = MODES.find((m) => m.key === res.mode)?.title || '';
-      html += `<div class="results">
+  function resultsHtml(r) {
+    if (r.phase !== 'results' || !S.results) return '';
+    const res = S.results;
+    const title = MODES.find((m) => m.key === res.mode)?.title || '';
+    return `<div class="results">
         <div class="tag">${esc(title)} · resultado</div>
         <h2>${esc(res.title)}</h2>
         ${res.lines.map((l) => `<p>${esc(l)}</p>`).join('')}
@@ -278,7 +286,181 @@
           .map((p) => `<li><span class="dot" style="background:${p.color}"></span>${esc(p.name)} <b>+${p.pts}</b></li>`)
           .join('')}</ul>
       </div>`;
-    }
+  }
+
+  // ---------- Armado del partido de fútbol ----------
+  const FB_SIZES = { '1v1': 1, '3v3': 3, '5v5': 5, '7v7': 7 };
+  const FB_MINUTES = [
+    [2, '2 min'],
+    [3, '3 min'],
+    [5, '5 min'],
+    [0, 'Sin límite'],
+  ];
+  const FB_GOALS = [
+    [3, '3'],
+    [5, '5'],
+    [7, '7'],
+    [0, 'Sin límite'],
+  ];
+
+  function futbolSetupHtml(r, host, hostName) {
+    const fb = r.fb;
+    const max = FB_SIZES[fb.size];
+    const online = r.players.filter((p) => p.connected);
+    const teamOf = (p) => (fb.teams[p.id] === 0 || fb.teams[p.id] === 1 ? fb.teams[p.id] : null);
+    const myTeam = teamOf({ id: S.me });
+    const seg = (key, options, current) =>
+      `<div class="seg">${options
+        .map(
+          ([v, label]) =>
+            `<button class="${v === current ? 'on' : ''}" data-cfg="${key}" data-v="${v}" ${host ? '' : 'disabled'}>${label}</button>`
+        )
+        .join('')}</div>`;
+    // El host arrastra a cualquiera; cada jugador, solo a sí mismo.
+    const chip = (p) => {
+      const drag = host || p.id === S.me;
+      return `<li class="${p.id === S.me ? 'me' : ''} ${drag ? 'drag' : ''}" data-id="${p.id}"><span class="grip">${drag ? '⠿' : ''}</span><span class="dot" style="background:${p.color}"></span><span class="nm">${esc(p.name)}${p.id === r.hostId ? ' 👑' : ''}</span>${pingTag(p.rtt)}</li>`;
+    };
+    const column = (team, title, color) => {
+      const members = online.filter((p) => teamOf(p) === team);
+      const full = team !== null && members.length >= max;
+      const joinable = myTeam !== team && !full;
+      return `<div class="fb-col" data-team="${team}" ${color ? `style="--team:${color}"` : ''}>
+        <h3>${title}${team !== null ? ` <small>${members.length}/${max}</small>` : ''}</h3>
+        <ul>${members.map((p) => chip(p)).join('') || '<li class="empty">Soltá acá</li>'}</ul>
+        ${joinable ? `<button class="btn small" data-join="${team}">${team === null ? 'Mirar' : 'Unirme'}</button>` : ''}
+      </div>`;
+    };
+    return `<div class="fb-setup">
+      <div class="fb-head">
+        <h2>⚽ Armado del partido</h2>
+        <div class="roomcode"><span>Sala</span><b>${esc(r.code)}</b><button class="btn small" id="copy">Copiar link</button></div>
+      </div>
+      <div class="fb-opts">
+        <label>Cancha ${seg('size', Object.keys(FB_SIZES).map((k) => [k, k]), fb.size)}</label>
+        <label>Duración ${seg('minutes', FB_MINUTES, fb.minutes)}</label>
+        <label>Goles ${seg('goals', FB_GOALS, fb.goals)}</label>
+      </div>
+      <div class="fb-teams">
+        ${column(0, 'Rojo', '#ff4d6d')}
+        ${column(null, 'Espectadores')}
+        ${column(1, 'Azul', '#3a86ff')}
+      </div>
+      ${
+        host
+          ? `<div class="fb-actions">
+              <button class="btn small" id="fbRandom">🎲 Random</button>
+              <button class="btn small" id="fbReset">↺ Reset</button>
+              <button class="btn small" id="fbBack">Volver a los juegos</button>
+              <button class="btn primary" id="fbStart">¡Arrancar partido!</button>
+            </div>`
+          : `<p class="wait">Arrastrá tu nombre a un equipo (o tocá Unirme). ${esc(hostName)} arranca el partido.</p>`
+      }
+      <p class="keys">${isTouch ? '⚽ patea · 💨 embiste' : 'Espacio (o X) patea: cuanto más pegada la pelota, más fuerte · Shift embiste'}</p>
+    </div>`;
+  }
+
+  function renderFutbolSetup(html) {
+    const r = S.room;
+    const panel = $('panel');
+    const scroll = panel.firstElementChild?.scrollTop || 0;
+    panel.innerHTML = html;
+    panel.firstElementChild.scrollTop = scroll;
+    const fb = (msg) => sendServer({ t: 'fb', ...msg });
+    $('copy').onclick = () => copyLink(r.code);
+    panel.querySelectorAll('[data-cfg]').forEach((b) => {
+      b.onclick = () => {
+        const v = b.dataset.cfg === 'size' ? b.dataset.v : Number(b.dataset.v);
+        fb({ op: 'cfg', [b.dataset.cfg]: v });
+      };
+    });
+    panel.querySelectorAll('li.drag').forEach((li) => enableDrag(li, (team) => fb({ op: 'team', id: Number(li.dataset.id), team })));
+    panel.querySelectorAll('[data-join]').forEach((b) => {
+      b.onclick = () => fb({ op: 'team', id: S.me, team: b.dataset.join === 'null' ? null : Number(b.dataset.join) });
+    });
+    if ($('fbRandom')) $('fbRandom').onclick = () => fb({ op: 'random' });
+    if ($('fbReset')) $('fbReset').onclick = () => fb({ op: 'reset' });
+    if ($('fbBack')) $('fbBack').onclick = () => sendServer({ t: 'setup', mode: null });
+    if ($('fbStart')) $('fbStart').onclick = () => sendServer({ t: 'start', mode: 'futbol' });
+  }
+
+  // Arrastrar y soltar con pointer events: anda igual con mouse y con el dedo (el drag & drop nativo
+  // de HTML no funciona en pantallas táctiles). Mientras se arrastra no se redibuja el panel.
+  function enableDrag(li, onDrop) {
+    li.addEventListener('pointerdown', (e) => {
+      if (e.button > 0) return;
+      const start = { x: e.clientX, y: e.clientY };
+      const rect = li.getBoundingClientRect();
+      let ghost = null;
+      let over = null;
+      try {
+        li.setPointerCapture(e.pointerId); // seguir recibiendo el movimiento aunque salga del nombre
+      } catch {}
+
+      const columnAt = (x, y) => {
+        if (ghost) ghost.style.display = 'none';
+        const col = document.elementFromPoint(x, y)?.closest('.fb-col');
+        if (ghost) ghost.style.display = '';
+        return col;
+      };
+      const move = (ev) => {
+        if (!ghost) {
+          if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
+          S.dragging = true;
+          ghost = li.cloneNode(true);
+          ghost.className = 'drag-ghost';
+          ghost.style.width = `${rect.width}px`;
+          document.body.appendChild(ghost);
+          li.classList.add('dragging');
+        }
+        ghost.style.transform = `translate(${ev.clientX - rect.width / 2}px, ${ev.clientY - rect.height / 2}px)`;
+        const col = columnAt(ev.clientX, ev.clientY);
+        if (col !== over) {
+          over?.classList.remove('drop-over');
+          over = col;
+          over?.classList.add('drop-over');
+        }
+      };
+      const end = (ev) => {
+        li.removeEventListener('pointermove', move);
+        li.removeEventListener('pointerup', end);
+        li.removeEventListener('pointercancel', end);
+        if (!ghost) return;
+        const col = ev.type === 'pointerup' ? columnAt(ev.clientX, ev.clientY) : null;
+        ghost.remove();
+        over?.classList.remove('drop-over');
+        S.dragging = false;
+        if (col && col !== li.closest('.fb-col')) {
+          const t = col.dataset.team;
+          onDrop(t === 'null' ? null : Number(t));
+        }
+        renderPanel();
+      };
+      li.addEventListener('pointermove', move);
+      li.addEventListener('pointerup', end);
+      li.addEventListener('pointercancel', end);
+    });
+  }
+
+  function copyLink(code) {
+    const link = `${location.origin}${location.pathname}?sala=${code}`;
+    navigator.clipboard?.writeText(link).then(
+      () => toast('Link copiado 👍'),
+      () => prompt('Copiá el link:', link)
+    ) ?? prompt('Copiá el link:', link);
+  }
+
+  function renderPanel() {
+    if (S.dragging) return; // se redibuja al soltar
+    const r = S.room;
+    const host = isHost();
+    const players = [...r.players].sort((a, b) => b.score - a.score || a.id - b.id);
+    const online = players.filter((p) => p.connected).length;
+    const mode = MODES.find((m) => m.key === S.selected) || MODES[0];
+    const hostName = playerById(r.hostId)?.name || 'el host';
+
+    let html = '<div class="card panel-card">' + resultsHtml(r);
+    if (r.setup === 'futbol') return renderFutbolSetup(html + futbolSetupHtml(r, host, hostName) + '</div>');
     html += `<div class="cols">
       <div>
         <div class="roomcode"><span>Sala</span><b>${esc(r.code)}</b><button class="btn small" id="copy">Copiar link</button></div>
@@ -304,11 +486,11 @@
         ).join('')}</div>
         ${
           host
-            ? `<button class="btn primary big" id="start">¡Jugar ${esc(mode.title)}!</button>`
+            ? `<button class="btn primary big" id="start">${mode.key === 'futbol' ? '⚽ Armar el partido' : `¡Jugar ${esc(mode.title)}!`}</button>`
             : `<p class="wait">Esperando a que ${esc(hostName)} arranque el próximo juego…</p>`
         }
         ${host && r.phase === 'results' ? '<div class="host-row"><button class="btn small" id="toLobby">Ocultar resultado</button></div>' : ''}
-        <p class="keys">${isTouch ? 'Arrastrá el dedo para moverte · 💨 para embestir' : 'Moverse: WASD o flechas · Embestida: Espacio'}</p>
+        <p class="keys">${isTouch ? 'Arrastrá el dedo para moverte · 💨 para embestir · ⚽ para patear' : 'Moverse: WASD o flechas · Embestida: Espacio (en fútbol: Shift; Espacio patea)'}</p>
       </div>
     </div></div>`;
 
@@ -317,13 +499,7 @@
     panel.innerHTML = html;
     panel.firstElementChild.scrollTop = scroll;
 
-    $('copy').onclick = () => {
-      const link = `${location.origin}${location.pathname}?sala=${r.code}`;
-      navigator.clipboard?.writeText(link).then(
-        () => toast('Link copiado 👍'),
-        () => prompt('Copiá el link:', link)
-      ) ?? prompt('Copiá el link:', link);
-    };
+    $('copy').onclick = () => copyLink(r.code);
     panel.querySelectorAll('.mode').forEach((btn) => {
       btn.onclick = () => {
         S.selected = btn.dataset.k;
@@ -331,7 +507,9 @@
         renderPanel();
       };
     });
-    if ($('start')) $('start').onclick = () => sendServer({ t: 'start', mode: S.selected });
+    if ($('start'))
+      $('start').onclick = () =>
+        sendServer(S.selected === 'futbol' ? { t: 'setup', mode: 'futbol' } : { t: 'start', mode: S.selected });
     if ($('toLobby')) $('toLobby').onclick = () => sendServer({ t: 'lobby' });
   }
 
@@ -348,10 +526,12 @@
   function hud(snap) {
     const round = S.round;
     if (!round) return;
-    const mins = Math.floor(snap.tl / 60);
+    // Reloj: cuenta regresiva; sin límite (tl null) cuenta para arriba; empatados al final, gol de oro.
+    const secs = snap.tl ?? snap.x?.el ?? 0;
+    const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
     setHud('hudMode', esc(round.title));
-    setHud('hudTime', `${mins}:${String(snap.tl % 60).padStart(2, '0')}`);
-    $('hudTime').classList.toggle('low', snap.ph === 'playing' && snap.tl <= 10);
+    setHud('hudTime', snap.x?.ot ? 'Gol de oro' : clock);
+    $('hudTime').classList.toggle('low', snap.ph === 'playing' && ((snap.tl != null && snap.tl <= 10) || !!snap.x?.ot));
 
     const mine = snap.b.find((b) => b.i === S.me);
     let info = '';
@@ -368,6 +548,13 @@
         .map((c, t) => `<span class="teambar"><i style="background:${round.info.teams[t].color}"></i>${Math.round((c / total) * 100)}%</span>`)
         .join('');
       if (mine) banner = '';
+    } else if (round.mode === 'futbol' && snap.x?.s) {
+      const [red, blue] = round.info.teams;
+      info = `<span class="teambar"><i style="background:${red.color}"></i>${snap.x.s[0]}</span> – <span class="teambar">${snap.x.s[1]}<i style="background:${blue.color}"></i></span>`;
+    }
+    if (round.mode === 'futbol' && snap.x?.ko != null) {
+      const t = round.info.teams[snap.x.ko];
+      banner = `Saca ${t.name}${mine?.tm === snap.x.ko ? ': ¡te toca!' : ''}`;
     }
     setHud('hudInfo', info);
     const ping = Math.round(P.rtt);
@@ -379,17 +566,20 @@
     if (mine) {
       const ready = P.active ? 1 - P.dashCd / P.cooldown : 1 - (mine.c || 0) / 9;
       $('dash').querySelector('i').style.width = `${ready * 100}%`;
+      setHud('dashLabel', isTouch ? '💨 embestida' : round.mode === 'futbol' ? 'Shift = embestida · Espacio = patear' : 'Espacio = embestida');
     }
 
     let center = '';
     if (snap.ph === 'countdown') {
       let team = '';
-      if (round.mode === 'pintada' && mine) {
+      if (round.info.teams && mine) {
         const t = round.info.teams[mine.tm];
         team = `<div class="help">Sos del equipo <b style="color:${t.color}">${esc(t.name)}</b></div>`;
       }
       if (round.mode === 'infeccion' && mine?.z) team = '<div class="help">🧟 <b>Arrancás de zombie</b></div>';
       center = `<div class="big">${snap.cd}</div><div class="title">${esc(round.title)}</div><div class="help">${esc(round.help)}</div>${team}`;
+    } else if (snap.x?.gol) {
+      center = `<div class="big">¡GOL!</div><div class="title">${esc(snap.x.gol)}</div>`;
     } else if (!mine) {
       center = '<div class="note">👀 Estás mirando: entrás en la próxima ronda</div>';
     } else if (mine.o) {
@@ -460,6 +650,14 @@
     sendServer({ t: 'in', x, y });
   }
 
+  // Patear (fútbol): el servidor decide si la pelota está en el área; acá solo el destello inmediato.
+  function kick() {
+    if (S.room?.phase !== 'playing') return;
+    sendInput();
+    sendServer({ t: 'kick' });
+    P.kickAt = performance.now();
+  }
+
   // Acción: directo desde el evento de teclado; el servidor la aplica al llegar.
   function dash() {
     if (P.active) P.dashQueued = true;
@@ -522,6 +720,7 @@
 
   function predictStep(dt, now, others) {
     const phys = S.round.phys;
+    const pr = S.round.info.playerR || R; // en fútbol el blob es más chico
     const inp = P.stun ? { x: 0, y: 0 } : quantize(direction()); // la misma dirección que recibe el servidor
     P.dashCd = Math.max(0, P.dashCd - dt);
     if (P.dashQueued) {
@@ -558,11 +757,11 @@
       const dx = o.x - P.x;
       const dy = o.y - P.y;
       const d = Math.hypot(dx, dy);
-      if (!d || d >= R * 2) continue;
+      if (!d || d >= pr * 2) continue;
       const nx = dx / d;
       const ny = dy / d;
-      P.x -= nx * (R * 2 - d); // el otro no se mueve acá: salir del todo
-      P.y -= ny * (R * 2 - d);
+      P.x -= nx * (pr * 2 - d); // el otro no se mueve acá: salir del todo
+      P.y -= ny * (pr * 2 - d);
       const rv = (o.vx - P.vx) * nx + (o.vy - P.vy) * ny;
       if (rv < 0) {
         const imp = (-(1 + phys.bounce) * rv) / 2;
@@ -579,24 +778,56 @@
         }
       }
     }
-    for (const w of S.round.info.walls || []) {
-      const cx = Math.max(w.x, Math.min(P.x, w.x + w.w));
-      const cy = Math.max(w.y, Math.min(P.y, w.y + w.h));
-      const dx = P.x - cx;
-      const dy = P.y - cy;
+    for (const c of S.round.info.posts || []) {
+      const dx = P.x - c.x;
+      const dy = P.y - c.y;
       const d = Math.hypot(dx, dy);
-      if (d >= R || d === 0) continue;
-      P.x += (dx / d) * (R - d);
-      P.y += (dy / d) * (R - d);
+      if (!d || d >= pr + c.r) continue;
+      P.x = c.x + (dx / d) * (pr + c.r);
+      P.y = c.y + (dy / d) * (pr + c.r);
       const vn = (P.vx * dx + P.vy * dy) / d;
       if (vn < 0) {
         P.vx -= (1.3 * vn * dx) / d;
         P.vy -= (1.3 * vn * dy) / d;
       }
     }
+    for (const w of S.round.info.walls || []) {
+      const cx = Math.max(w.x, Math.min(P.x, w.x + w.w));
+      const cy = Math.max(w.y, Math.min(P.y, w.y + w.h));
+      const dx = P.x - cx;
+      const dy = P.y - cy;
+      const d = Math.hypot(dx, dy);
+      if (d >= pr || d === 0) continue;
+      P.x += (dx / d) * (pr - d);
+      P.y += (dy / d) * (pr - d);
+      const vn = (P.vx * dx + P.vy * dy) / d;
+      if (vn < 0) {
+        P.vx -= (1.3 * vn * dx) / d;
+        P.vy -= (1.3 * vn * dy) / d;
+      }
+    }
+    // Saque del medio (fútbol): las mismas trabas que Futbol.kickoffLimits, para no chocar contra la línea.
+    const ko = S.snap?.x?.ko;
+    const myTeam = S.snap?.b.find((b) => b.i === S.me)?.tm;
+    if (ko != null && myTeam != null) {
+      const { cx, cy } = S.round.info.field;
+      if (myTeam === 0 && P.x > cx - pr) [P.x, P.vx] = [cx - pr, Math.min(0, P.vx)];
+      if (myTeam === 1 && P.x < cx + pr) [P.x, P.vx] = [cx + pr, Math.max(0, P.vx)];
+      const dx = P.x - cx;
+      const dy = P.y - cy;
+      const d = Math.hypot(dx, dy);
+      const min = S.round.info.circleR + pr;
+      if (myTeam !== ko && d < min) {
+        const nx = d ? dx / d : myTeam === 0 ? -1 : 1;
+        const ny = d ? dy / d : 0;
+        P.x = cx + nx * min;
+        P.y = cy + ny * min;
+      }
+    }
     if (phys.bounded) {
-      P.x = Math.max(R, Math.min(W - R, P.x));
-      P.y = Math.max(R, Math.min(H - R, P.y));
+      const box = phys.box || { x0: 0, y0: 0, x1: W, y1: H };
+      P.x = Math.max(box.x0 + pr, Math.min(box.x1 - pr, P.x));
+      P.y = Math.max(box.y0 + pr, Math.min(box.y1 - pr, P.y));
     }
     P.hist.push({ t: now, x: P.x, y: P.y, vx: P.vx, vy: P.vy });
     P.lastStep = now;
@@ -606,13 +837,18 @@
     while (P.hist.length && now - P.hist[0].t > 1500) P.hist.shift();
   }
 
-  const GAME_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift'];
+  const GAME_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift', 'x'];
   addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
     const k = e.key.toLowerCase();
     if (!GAME_KEYS.includes(k)) return;
     if (S.round) e.preventDefault();
-    if ((k === ' ' || k === 'shift') && !e.repeat) dash();
+    // En fútbol: Espacio (o X) patea y Shift embiste. En el resto, Espacio o Shift embisten.
+    const futbol = S.round?.mode === 'futbol';
+    if (!e.repeat) {
+      if (futbol && (k === ' ' || k === 'x')) kick();
+      else if (k === 'shift' || (!futbol && k === ' ')) dash();
+    }
     keys.add(k);
     sendInput();
   });
@@ -653,6 +889,10 @@
   };
   cv.addEventListener('touchend', endTouch);
   cv.addEventListener('touchcancel', endTouch);
+  $('touchKick').addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    kick();
+  });
   $('touchDash').addEventListener('touchstart', (e) => {
     e.preventDefault();
     dash();
@@ -803,11 +1043,109 @@
     }
   }
 
+  function drawCancha() {
+    const { field: f, goal: g, posts, teams, view } = S.round.info;
+    const { cx, cy } = f;
+    // Pasto a franjas.
+    const stripes = 12;
+    const sw = (f.x1 - f.x0) / stripes;
+    ctx.fillStyle = '#1f7a3f';
+    ctx.fillRect(view.x0, view.y0, view.x1 - view.x0, view.y1 - view.y0);
+    for (let i = 0; i < stripes; i++) {
+      ctx.fillStyle = i % 2 ? '#1f7a3f' : '#238a47';
+      ctx.fillRect(f.x0 + i * sw, f.y0, sw + 0.5, f.y1 - f.y0);
+    }
+    // Arcos: la red, con el color del equipo que defiende.
+    for (const [side, team] of [
+      [-1, teams[0]],
+      [1, teams[1]],
+    ]) {
+      const x = side < 0 ? f.x0 - g.depth : f.x1;
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(x, g.top, g.depth, g.bottom - g.top);
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 1.5;
+      for (let yy = g.top + 12; yy < g.bottom; yy += 12) {
+        ctx.beginPath();
+        ctx.moveTo(x, yy);
+        ctx.lineTo(x + g.depth, yy);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = team.color;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      const back = side < 0 ? f.x0 - g.depth : f.x1 + g.depth;
+      const line = side < 0 ? f.x0 : f.x1;
+      ctx.moveTo(line, g.top);
+      ctx.lineTo(back, g.top);
+      ctx.lineTo(back, g.bottom);
+      ctx.lineTo(line, g.bottom);
+      ctx.stroke();
+    }
+    // Líneas de la cancha.
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(f.x0, f.y0, f.x1 - f.x0, f.y1 - f.y0);
+    ctx.beginPath();
+    ctx.moveTo(cx, f.y0);
+    ctx.lineTo(cx, f.y1);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, S.round.info.circleR, 0, Math.PI * 2);
+    ctx.stroke();
+    for (const side of [-1, 1]) {
+      const line = side < 0 ? f.x0 : f.x1;
+      const boxW = Math.min(160, (f.x1 - f.x0) * 0.12);
+      const boxH = Math.min(380, (f.y1 - f.y0) * 0.55);
+      ctx.strokeRect(side < 0 ? line : line - boxW, cy - boxH / 2, boxW, boxH);
+    }
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fill();
+    // Palos.
+    for (const p of posts) {
+      ctx.fillStyle = '#f3f4ff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  function drawBall(now) {
+    if (!S.ball) return;
+    const { x, y } = entityPos(S.ball, now);
+    const r = S.round.info.ballR;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(x + 3, y + r * 0.8, r, r * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#1b1d36';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Gajos que giran con la distancia recorrida, para que se note que rueda.
+    const spin = (x + y) / r;
+    ctx.fillStyle = '#1b1d36';
+    for (let i = 0; i < 3; i++) {
+      const a = spin + (i * Math.PI * 2) / 3;
+      ctx.beginPath();
+      ctx.arc(x + Math.cos(a) * r * 0.5, y + Math.sin(a) * r * 0.5, r * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   function drawBody(o, now, scale) {
     const round = S.round;
     const player = playerById(o.i);
     let color = player?.color || '#ccc';
-    if (round.mode === 'pintada') color = round.info.teams[o.tm].color;
+    if (round.info.teams) color = round.info.teams[o.tm].color;
     if (o.z) color = '#5f7f3a';
 
     let size = 1;
@@ -835,7 +1173,7 @@
     const dx = look.dx / dl;
     const dy = look.dy / dl;
 
-    const r = R * size;
+    const r = (round.info.playerR || R) * size;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(o.x, o.y);
@@ -868,7 +1206,29 @@
       ctx.fill();
     }
 
-    if (o.i === S.me) {
+    // Fútbol: tu área de disparo (se ilumina con la pelota a tiro) y borde blanco cuando alguien patea.
+    if (round.mode === 'futbol' && !o.o) {
+      if (o.i === S.me && S.ball) {
+        const reach = r + round.info.kickReach;
+        const b = entityPos(S.ball, now);
+        const inRange = Math.hypot(b.x - o.x, b.y - o.y) - round.info.ballR <= reach;
+        const flash = P.kickAt && now - P.kickAt < 150;
+        ctx.strokeStyle = flash ? 'rgba(255,255,255,0.95)' : inRange ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.18)';
+        ctx.lineWidth = flash ? 4 : 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, reach, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      if (o.k) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    if (o.i === S.me && round.mode !== 'futbol') {
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 3;
       ctx.setLineDash([8, 6]);
@@ -902,13 +1262,30 @@
       ctx.beginPath();
       ctx.arc(ex, ey, er, 0, Math.PI * 2);
       ctx.fill();
+      if (o.dz) {
+        // Mareado por un pelotazo: ojos en espiral que giran (cada uno para un lado).
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.lineWidth = Math.max(1.2, er * 0.18);
+        ctx.beginPath();
+        const turn = (now / 90) * side;
+        for (let k = 0; k <= 26; k++) {
+          const a = turn + k * 0.5;
+          const rr = (er * 0.85 * k) / 26;
+          const sx = ex + Math.cos(a) * rr;
+          const sy = ey + Math.sin(a) * rr;
+          if (k) ctx.lineTo(sx, sy);
+          else ctx.moveTo(sx, sy);
+        }
+        ctx.stroke();
+        continue;
+      }
       ctx.fillStyle = o.z ? '#d62839' : '#1a1a2e';
       ctx.beginPath();
       ctx.arc(ex + dx * er * 0.4, ey + dy * er * 0.4, er * 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    if (o.s) {
+    if (o.s || o.dz) {
       ctx.font = '16px system-ui';
       ctx.textAlign = 'center';
       for (let i = 0; i < 3; i++) {
@@ -974,9 +1351,13 @@
     if (!inRound) return drawIdle(now, cw, ch);
 
     const top = 56;
-    const scale = Math.min((cw - 16) / W, (ch - top - 12) / H);
-    const ox = (cw - W * scale) / 2;
-    const oy = top + (ch - top - H * scale) / 2;
+    // Cámara: el mundo entero, o el rectángulo que pida el modo (fútbol: la cancha del tamaño elegido).
+    const v = S.round.info.view || { x0: 0, y0: 0, x1: W, y1: H };
+    const vw = v.x1 - v.x0;
+    const vh = v.y1 - v.y0;
+    const scale = Math.min((cw - 16) / vw, (ch - top - 12) / vh);
+    const ox = (cw - vw * scale) / 2 - v.x0 * scale;
+    const oy = top + (ch - top - vh * scale) / 2 - v.y0 * scale;
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
 
     const bodies = currentBodies(now);
@@ -991,9 +1372,11 @@
     if (S.round.mode === 'sumo') drawSumo(extra, now);
     else if (S.round.mode === 'infeccion') drawInfeccion();
     else if (S.round.mode === 'pintada') drawPintada(extra, now);
+    else if (S.round.mode === 'futbol') drawCancha();
 
     bodies.sort((a, b) => (b.o || 0) - (a.o || 0) || a.y - b.y);
     for (const o of bodies) drawBody(o, now, scale);
+    if (S.round.mode === 'futbol') drawBall(now);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawJoystick();

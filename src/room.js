@@ -10,6 +10,11 @@ const ABANDON_MS = 10 * 60 * 1000;
 const HOST_GRACE_MS = 8000;
 const LOBBY_REFRESH_MS = 3000;
 
+// Armado del partido de fútbol (pantalla previa): tamaño de cancha = jugadores por equipo.
+const FB_SIZES = { '1v1': 1, '3v3': 3, '5v5': 5, '7v7': 7 };
+const FB_MINUTES = [2, 3, 5, 0]; // 0 = sin límite
+const FB_GOALS = [3, 5, 7, 0]; // 0 = sin límite
+
 function send(ws, msg) {
   if (ws && ws.readyState === 1) ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
 }
@@ -31,6 +36,8 @@ class Room {
     this.acc = 0;
     this.steps = 0;
     this.lastLobbyRefresh = 0;
+    this.setup = null; // 'futbol' mientras está abierta la pantalla de armado
+    this.fb = { size: '5v5', minutes: 3, goals: 5, teams: {} }; // teams: id → 0 (Rojo) | 1 (Azul)
   }
 
   connected() {
@@ -92,8 +99,11 @@ class Room {
         return;
       }
       case 'dash':
-        // Acción: se aplica al llegar, sin esperar al paso.
+        // Acciones: se aplican al llegar, sin esperar al paso.
         if (this.phase === 'playing') this.mode.dash(p.id);
+        return;
+      case 'kick':
+        if (this.phase === 'playing') this.mode.kick?.(p.id);
         return;
       case 'eco':
         // Medición de latencia: se devuelve tal cual. El cliente informa su último RTT para el lobby.
@@ -101,7 +111,14 @@ class Room {
         return send(p.ws, { t: 'eco', c: msg.c });
     }
 
+    if (msg.t === 'fb') return this.handleFutbol(p, msg);
+
     if (p.id !== this.hostId) return;
+    if (msg.t === 'setup' && !this.inRound()) {
+      this.setup = msg.mode === 'futbol' ? 'futbol' : null;
+      if (this.setup && !Object.keys(this.fb.teams).length) this.randomTeams();
+      return this.broadcastRoom();
+    }
     if (msg.t === 'start') return this.start(p, msg.mode);
     if (msg.t === 'end' && this.phase === 'playing') return this.finish();
     if (msg.t === 'lobby' && this.phase === 'results') {
@@ -112,16 +129,84 @@ class Room {
     }
   }
 
+  // Pantalla de armado del fútbol: cada uno elige su equipo; el host mueve a cualquiera y configura.
+  handleFutbol(p, msg) {
+    if (this.inRound()) return;
+    const host = p.id === this.hostId;
+    const fb = this.fb;
+    switch (msg.op) {
+      case 'team': {
+        const id = Number(msg.id);
+        if (!this.players.has(id) || (!host && id !== p.id)) return;
+        const team = msg.team === 0 || msg.team === 1 ? msg.team : null;
+        if (team === null) delete fb.teams[id];
+        else if (fb.teams[id] !== team) {
+          if (this.teamCount(team) >= FB_SIZES[fb.size]) return send(p.ws, { t: 'error', msg: 'Ese equipo está completo' });
+          fb.teams[id] = team;
+        }
+        break;
+      }
+      case 'cfg':
+        if (!host) return;
+        if (msg.size in FB_SIZES) {
+          fb.size = msg.size;
+          this.trimTeams();
+        }
+        if (FB_MINUTES.includes(msg.minutes)) fb.minutes = msg.minutes;
+        if (FB_GOALS.includes(msg.goals)) fb.goals = msg.goals;
+        if (!fb.minutes && !fb.goals) fb.goals = 5; // algún final tiene que tener
+        break;
+      case 'random':
+        if (!host) return;
+        this.randomTeams();
+        break;
+      case 'reset':
+        if (!host) return;
+        fb.teams = {};
+        break;
+      default:
+        return;
+    }
+    this.broadcastRoom();
+  }
+
+  teamCount(team) {
+    return Object.entries(this.fb.teams).filter(([id, t]) => t === team && this.players.get(Number(id))?.connected).length;
+  }
+
+  // Si se achica la cancha, los que no entran pasan a espectadores (quedan los primeros en sumarse).
+  trimTeams() {
+    const max = FB_SIZES[this.fb.size];
+    for (const team of [0, 1]) {
+      const ids = Object.keys(this.fb.teams).filter((id) => this.fb.teams[id] === team);
+      for (const id of ids.slice(max)) delete this.fb.teams[id];
+    }
+  }
+
+  randomTeams() {
+    const max = FB_SIZES[this.fb.size];
+    const list = this.connected().sort(() => Math.random() - 0.5).slice(0, max * 2);
+    this.fb.teams = {};
+    list.forEach((pl, i) => (this.fb.teams[pl.id] = i % 2));
+  }
+
   start(host, key) {
     if (this.inRound()) return;
     const def = this.MODES[key];
     if (!def) return;
-    const players = this.connected();
+    let players = this.connected();
+    let options;
+    if (key === 'futbol') {
+      // Juegan los que están en un equipo; el resto mira.
+      players = players.filter((pl) => this.fb.teams[pl.id] === 0 || this.fb.teams[pl.id] === 1);
+      options = { ...this.fb, perTeam: FB_SIZES[this.fb.size] };
+    }
     if (players.length < def.minPlayers) {
-      return send(host.ws, { t: 'error', msg: `${def.Mode.title} necesita al menos ${def.minPlayers} jugadores` });
+      const msg = key === 'futbol' ? 'Armá los equipos: no hay nadie en Rojo ni en Azul' : `${def.Mode.title} necesita al menos ${def.minPlayers} jugadores`;
+      return send(host.ws, { t: 'error', msg });
     }
     this.modeKey = key;
-    this.mode = new def.Mode(players);
+    this.mode = new def.Mode(players, options);
     this.phase = 'countdown';
     this.countdown = COUNTDOWN;
     this.results = null;
@@ -222,6 +307,8 @@ class Room {
       hostId: this.hostId,
       phase: this.phase,
       mode: this.modeKey,
+      setup: this.setup,
+      fb: this.fb,
       players: [...this.players.values()].map((p) => ({
         id: p.id,
         name: p.name,

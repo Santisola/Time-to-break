@@ -9,8 +9,9 @@ Jueguitos multijugador por navegador para el Time to Break del viernes. Funciona
 | **Sumo de blobs** | Empujá a todos fuera de la plataforma, que se achica con el tiempo. Gana el último en pie. | hasta 90 s |
 | **Infección** | Arranca 1 zombie cada 6 jugadores, y contagian tocando. Sobreviví hasta el final. Necesita 2 o más jugadores. | 100 s |
 | **Pintada** | Equipos (2, o 4 si son 12 o más) pintan el piso. Los baldes manchan un área grande. | 90 s |
+| **Haxblobs** ⚽ | Rojo contra Azul con pelota y arcos. **Espacio (o X) patea**: la pelota tiene que estar en el área alrededor del blob y cuanto más pegada, más fuerte. **Shift embiste** (empuja la pelota o traba). Física calibrada con la de HaxBall. Antes de jugar se abre el **armado del partido**: equipos (se arrastran los nombres entre Rojo, Espectadores y Azul: cada uno el suyo, el host a cualquiera; botones Random y Reset), cancha 1v1/3v3/5v5/7v7, duración y goles. Empate al final: gol de oro. | 2 a 5 min o sin límite |
 
-Controles: **WASD o flechas** para moverse y **Espacio** para embestir. En celular se arrastra el dedo para moverse y se toca el botón 💨 para embestir.
+Controles: **WASD o flechas** para moverse y **Espacio** para embestir (en fútbol: **Shift** embiste y **Espacio** patea). En celular se arrastra el dedo para moverse, 💨 embiste y ⚽ patea.
 
 Los puntos se acumulan entre rondas, y el ranking de la sala dura toda la reunión.
 

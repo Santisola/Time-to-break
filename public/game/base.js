@@ -196,13 +196,38 @@ class BaseMode {
     }
   }
 
-  bounds() {
+  // Obstáculos circulares fijos (palos del arco, etc.). El cliente hace lo mismo en predictStep.
+  posts(circles) {
     for (const b of this.bodies) {
       if (!b.alive) continue;
-      if (b.x < b.r) [b.x, b.vx] = [b.r, Math.abs(b.vx) * 0.3];
-      if (b.x > W - b.r) [b.x, b.vx] = [W - b.r, -Math.abs(b.vx) * 0.3];
-      if (b.y < b.r) [b.y, b.vy] = [b.r, Math.abs(b.vy) * 0.3];
-      if (b.y > H - b.r) [b.y, b.vy] = [H - b.r, -Math.abs(b.vy) * 0.3];
+      for (const c of circles) {
+        const dx = b.x - c.x;
+        const dy = b.y - c.y;
+        const d = Math.hypot(dx, dy);
+        const min = b.r + c.r;
+        if (!d || d >= min) continue;
+        const nx = dx / d;
+        const ny = dy / d;
+        b.x = c.x + nx * min;
+        b.y = c.y + ny * min;
+        const vn = b.vx * nx + b.vy * ny;
+        if (vn < 0) {
+          b.vx -= 1.3 * vn * nx;
+          b.vy -= 1.3 * vn * ny;
+        }
+      }
+    }
+  }
+
+  // Bordes del mundo, o de phys.box si el modo define otro rectángulo (el cliente usa el mismo).
+  bounds() {
+    const { x0, y0, x1, y1 } = this.phys.box || { x0: 0, y0: 0, x1: W, y1: H };
+    for (const b of this.bodies) {
+      if (!b.alive) continue;
+      if (b.x < x0 + b.r) [b.x, b.vx] = [x0 + b.r, Math.abs(b.vx) * 0.3];
+      if (b.x > x1 - b.r) [b.x, b.vx] = [x1 - b.r, -Math.abs(b.vx) * 0.3];
+      if (b.y < y0 + b.r) [b.y, b.vy] = [y0 + b.r, Math.abs(b.vy) * 0.3];
+      if (b.y > y1 - b.r) [b.y, b.vy] = [y1 - b.r, -Math.abs(b.vy) * 0.3];
     }
   }
 
@@ -228,7 +253,8 @@ class BaseMode {
 
   /**
    * Estado por tick que viaja por el canal no confiable (si se pierde uno, llega el siguiente).
-   * b: tuplas [id, x, y, vx, vy, flags, cooldown 0-9, equipo] con flags 1=afuera 2=embistiendo 4=aturdido 8=zombie.
+   * b: tuplas [id, x, y, vx, vy, flags, cooldown 0-9, equipo] con flags 1=afuera 2=embistiendo 4=aturdido 8=zombie
+   *    16=pateando 32=mareado (pelotazo).
    *    La velocidad permite extrapolar a los demás sin buffer de interpolación.
    * v: lo que solo necesita cada jugador para predecir su propio blob: [velocidad, cooldown de embestida].
    */
@@ -237,7 +263,7 @@ class BaseMode {
     const v = {};
     for (const body of this.bodies) {
       const o = this.bodyState(body);
-      b.push([o.i, o.x, o.y, o.vx, o.vy, (o.o ? 1 : 0) | (o.d ? 2 : 0) | (o.s ? 4 : 0) | (o.z ? 8 : 0), o.c || 0, o.tm ?? 0]);
+      b.push([o.i, o.x, o.y, o.vx, o.vy, (o.o ? 1 : 0) | (o.d ? 2 : 0) | (o.s ? 4 : 0) | (o.z ? 8 : 0) | (o.k ? 16 : 0) | (o.dz ? 32 : 0), o.c || 0, o.tm ?? 0]);
       v[o.i] = [o.sp || 1, o.dc || 1.4];
     }
     return { tl: Math.ceil(this.timeLeft()), b, x: this.extra(), v };

@@ -638,3 +638,210 @@ h3 {
 .net.bad {
   color: var(--accent);
 }
+
+#touchKick {
+  position: fixed;
+  right: 124px;
+  bottom: 40px;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: rgba(36, 39, 74, 0.85);
+  font-size: 36px;
+}
+
+/* Armado del partido de fútbol */
+.fb-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.fb-head h2 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.fb-head .roomcode {
+  margin: 0;
+}
+
+.fb-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+.fb-opts label {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.seg {
+  display: inline-flex;
+  background: var(--card-2);
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.seg button {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.seg button:disabled {
+  cursor: default;
+}
+
+.seg button.on {
+  background: var(--brand-2);
+  color: #fff;
+}
+
+.fb-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.fb-col {
+  background: var(--card-2);
+  border: 2px solid var(--team, var(--line));
+  border-radius: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 140px;
+}
+
+.fb-col h3 {
+  margin: 0;
+  color: var(--team, var(--muted));
+  font-weight: 700;
+}
+
+.fb-col h3 small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.fb-col ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.fb-col li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 10px;
+  font-size: 15px;
+}
+
+.fb-col li.me {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fb-col li.empty {
+  color: var(--muted);
+  justify-content: center;
+}
+
+.fb-col .nm {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fb-col li.drag {
+  cursor: grab;
+  touch-action: none; /* que el dedo arrastre el nombre en vez de scrollear */
+  user-select: none;
+}
+
+.fb-col li.drag:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.fb-col li.dragging {
+  opacity: 0.35;
+}
+
+.grip {
+  width: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.fb-col.drop-over {
+  background: color-mix(in srgb, var(--team, var(--brand-2)) 18%, var(--card-2));
+  border-style: dashed;
+}
+
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 20;
+  pointer-events: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 2px solid var(--brand-2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 15px;
+  cursor: grabbing;
+}
+
+.fb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.fb-actions .btn.primary {
+  margin-left: auto;
+}
+
+@media (max-width: 720px) {
+  .fb-teams {
+    grid-template-columns: 1fr;
+  }
+  .fb-actions .btn.primary {
+    margin-left: 0;
+    width: 100%;
+  }
+}
