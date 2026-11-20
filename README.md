@@ -33,7 +33,7 @@ Basado en la arquitectura de red de otro juego del equipo (Fulbito):
 - Nagle apagado, sin compresión por mensaje, keepalive con ping de protocolo, try/catch por sala y límite de mensajes por conexión.
 - **El ping de cada uno** se ve en el lobby y arriba durante la partida (verde < 60 ms, amarillo < 120, rojo más).
 
-Lo que más pesa igual es **dónde está el servidor**: tiene que estar cerca de los jugadores (ver abajo).
+Lo que más pesa igual es **dónde está el servidor**: tiene que estar cerca de los jugadores. Por eso la forma recomendada es correrlo en Argentina (ver abajo).
 
 ## Correrlo
 
@@ -42,29 +42,34 @@ npm install
 npm start          # http://localhost:3000  (PORT=xxxx para cambiar el puerto)
 ```
 
-## Publicarlo
+## Jugar el viernes (recomendado)
 
-Es un único proceso Node con el estado en memoria: **una sola instancia**, sin base de datos ni build.
+El servidor corre **en la compu de quien organiza**, solo durante la reunión, y se publica con un túnel gratuito de Cloudflare (sin cuenta ni tarjeta):
 
-### Oracle Cloud Always Free, Santiago de Chile (recomendado, gratis)
+```bash
+npm install        # solo la primera vez
+npm run jugar
+```
 
-Medido desde Buenos Aires: ~30 ms de ida y vuelta (Render en EE.UU.: ~220 ms).
+Imprime un link tipo `https://palabras-al-azar.trycloudflare.com`: se pega en el chat de la meet y listo. Dejá la terminal abierta mientras juegan; `Ctrl+C` corta todo.
 
-1. Crear la cuenta en [oracle.com/cloud/free](https://www.oracle.com/cloud/free/) eligiendo **Chile Central (Santiago)** como *home region* (no se puede cambiar después; lo gratis solo corre en la home region). Pide tarjeta para verificar identidad, no cobra.
-2. **Compute → Instances → Create instance**: imagen **Ubuntu 24.04**, shape *Always Free* (`VM.Standard.E2.1.Micro` o `VM.Standard.A1.Flex`), subir tu clave SSH pública.
-3. En la **Subnet → Security List**, agregar *Ingress rules* TCP **80** y **443** desde `0.0.0.0/0`.
-4. Entrar por SSH (`ssh ubuntu@<ip-publica>`) y correr:
+- **Latencia:** Cloudflare tiene datacenter en Buenos Aires (Ezeiza), así que todo queda en Argentina. Medido: ~10 ms ida y vuelta desde la misma compu; para el resto del equipo, del orden de 15–30 ms.
+- El link **cambia cada vez** que se corre.
+- Con 20 jugadores el servidor sube ~5 Mbps: conviene fibra o cable.
+- La compu no se puede suspender durante la reunión.
 
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/Santisola/Time-to-break/main/deploy/oracle-setup.sh | sudo bash
-   ```
+## Publicarlo en un servidor fijo (opcional)
 
-   Instala Node, el servicio y Caddy con HTTPS automático, y al final imprime la URL (`https://<ip>.sslip.io`, o tu dominio con `DOMAIN=...`).
-5. Para actualizar después de un push, el mismo comando. Ojo: reinicia el servidor y corta las salas abiertas.
+Es un único proceso Node con el estado en memoria: **una sola instancia**, sin base de datos ni build. Lo que más pesa es que esté **cerca de los jugadores**.
 
-### Otras opciones
+- **Render** (está publicado en https://time-to-break.onrender.com): anda, pero desde Argentina tiene ~220 ms.
+- **Oracle Cloud Always Free, Santiago de Chile** (~30 ms): gratis, pero pide tarjeta para verificar identidad y puede apagar las máquinas sin uso. En una VM Ubuntu, `deploy/oracle-setup.sh` instala todo con HTTPS automático:
 
-- **Render** (respaldo): servicio web desde el repo con build `npm install` y start `npm start`. Anda, pero desde Argentina tiene ~220 ms.
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Santisola/Time-to-break/main/deploy/oracle-setup.sh | sudo bash
+  ```
+
+  Sin dominio usa `https://<ip>.sslip.io`; con uno (por ejemplo DuckDNS, gratis): `sudo DOMAIN=nombre.duckdns.org bash`. Hay que abrir los puertos 80 y 443 en la Security List de la subnet.
 - **Cualquier VPS o hosting con Node o Docker** cerca de los jugadores (hay un `Dockerfile`).
 
 ## Sumar un juego nuevo
@@ -80,5 +85,6 @@ server.js            HTTP estático + WebSocket + loop a 60 Hz para todas las sa
 src/room.js          sala: jugadores, host, fases, puntajes y la partida (paso fijo, snapshots)
 public/game/         la simulación, compartida: el servidor la corre y el cliente la usa para predecir
 public/client.js     UI, dibujo (canvas), extrapolación de los demás y predicción del blob propio
+scripts/jugar.js     `npm run jugar`: servidor local + túnel de Cloudflare
 deploy/              script de instalación para Oracle Cloud (o cualquier Ubuntu)
 ```
